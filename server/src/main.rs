@@ -97,48 +97,11 @@ async fn handle_client(mut socket: TcpStream) {
 
 async fn process_message(message: Message) {
     match message {
-        Message::Image(filename, data) => save_image(&filename, &data).await,
+        Message::Command(command) => {},
         Message::Move(text) => println!("Received the following text message: {}", text),
         Message::Text(text) => println!("Received the following text message: {}", text),
+        Message::Board(board_string) => {},
+        Message::Error(e) => {},
+        Message::Log(message) => {},
     }
-}
-
-async fn save_file(filename: &str, data: &[u8]) {
-    info!("Identified message as a file.");
-    tokio::fs::create_dir_all(FILE_STORE).await.expect("Could not create files directory");
-
-    let mut file_path = PathBuf::from(FILE_STORE).join(filename);
-    info!("Trying to save the file to {:?}", file_path);
-    if fs::metadata(&file_path).await.is_ok() {
-        info!("File already exists, making unique");
-        file_path = make_path_unique(file_path).await;
-    }
-    info!("New file path: {:?}", file_path);
-
-    tokio::fs::write(&file_path, data).await.expect("Could not write file");
-    info!("Saved the file to {:?}.", file_path);
-}
-
-async fn make_path_unique(file_path: PathBuf) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs();
-
-    let new_filename = if let Some(ext) = file_path.extension() {
-        format!(
-            "{}_{}.{}",
-            file_path.file_stem().unwrap().to_string_lossy(),
-            timestamp,
-            ext.to_string_lossy()
-        )
-    } else {
-        format!(
-            "{}_{}",
-            file_path.file_stem().unwrap().to_string_lossy(),
-            timestamp
-        )
-    };
-
-    file_path.with_file_name(new_filename)
 }
