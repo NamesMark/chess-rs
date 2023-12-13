@@ -1,5 +1,5 @@
 # chess-rs
-Online chess server that allows players to play 1v1 matches utilizing long algebraic notation.
+Online chess server that allows to play 1v1 matches utilizing long algebraic notation in CLI.
 
 # Commands
 - `/log in`
@@ -21,4 +21,4 @@ Online chess server that allows players to play 1v1 matches utilizing long algeb
 3. Errors with `anyhow` and `thiserror` 
 4. Database - `Postgre SQL` (?)
 5. Web frontend with ...
-6. Metrics using Prometheus
+6. Metrics using `Prometheus`
