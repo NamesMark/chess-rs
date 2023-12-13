@@ -132,6 +132,12 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     };
 
     server_state.anon_user_connections.lock().await.insert(socket_addr, tx);
+    info!("New anon_user_connections entry added, address: {}", socket_addr);
+    //debugging:
+    {
+        let anon_connections = server_state.anon_user_connections.lock().await;
+        info!("Current anon_user_connections: {:?}", anon_connections.keys());
+    }
 
     let (mut reader, mut writer) = socket.into_split();
 
@@ -207,6 +213,9 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     //     }
     //     server_state.user_connections.lock().unwrap().remove(&username);
     // }
+
+    let _ = tokio::try_join!(read_task, write_task);
+
     {
         let mut anon_user_connections = server_state.anon_user_connections.lock().await;
         if let Some(sender) = anon_user_connections.get(&socket_addr) {
@@ -226,7 +235,7 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
         }
     }
 
-    let _ = tokio::try_join!(read_task, write_task);
+    
 }
 
 async fn process_message(message: Message, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
@@ -268,6 +277,12 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     send_message(&username, Message::Log(format!("Authenticated successfully. Welcome back, {}.", username)), server_state.clone()).await;
                 } else {
                     error!("Sender not found for socket address: {:?}", socket_addr);
+                    //debugging:
+                    {
+                        let anon_connections = server_state.anon_user_connections.lock().await;
+                        info!("Current anon_user_connections: {:?}", anon_connections.keys());
+                    }
+
                 }
             } else {
                 register(&username);
@@ -275,12 +290,22 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
                 };
+                if let Some(test_sender) = sender.clone() {
+                    info!("Sender is {:?}", test_sender);
+                } else {
+                    info!("Sender doesn't exist");
+                }
                 if let Some(sender) = sender {
                     let mut user_connections = server_state.user_connections.lock().await;
                     user_connections.insert(username.clone(), sender.clone());
                     send_message(&username, Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username)), server_state.clone()).await;
                 } else {
                     error!("Tried registering. Sender not found for socket address: {:?}", socket_addr);
+                    //debugging:
+                    {
+                        let anon_connections = server_state.anon_user_connections.lock().await;
+                        info!("Current anon_user_connections: {:?}", anon_connections.keys());
+                    }
                 }
             }
         }, 
@@ -311,6 +336,7 @@ async fn authenticate(username: &str) -> bool {
 }
 
 async fn register(username: &str) {
+    info!("Trying to register {username}...");
     match tokio::fs::OpenOptions::new()
         .append(true)
         .open(USER_FILE)
@@ -319,7 +345,10 @@ async fn register(username: &str) {
                 let content = format!("{}\n", username);
                 if let Err(e) = file.write_all(content.as_bytes()).await {
                     error!("Failed to write to user file: {}", e);
+                } else {
+                    info!("Registered {username}.");
                 }
+                
             }
             Err(e) => error!("Failed to open user file for writing: {}", e),
     }
