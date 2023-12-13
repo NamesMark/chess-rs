@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 
@@ -8,9 +9,7 @@ use tokio::signal;
 use tokio::sync::broadcast;
 use log::{info, error};
 
-use common::{Message, DEFAULT_HOST, DEFAULT_PORT};
-
-const IMAGE_STORE: &str = "images/";
+use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, print_board, piece_to_unicode};
 
 #[tokio::main]
 async fn main() {
@@ -97,11 +96,26 @@ async fn handle_client(mut socket: TcpStream) {
 
 async fn process_message(message: Message) {
     match message {
-        Message::Command(command) => {},
-        Message::Move(text) => println!("Received the following text message: {}", text),
+        Message::Command(command) => process_command(command),
+        Message::Move(user_move) => process_move(user_move),
         Message::Text(text) => println!("Received the following text message: {}", text),
-        Message::Board(board_string) => {},
+        Message::Board(board_string) => panic!("Expected Command, Move or Text, received Board"),
         Message::Error(e) => {},
         Message::Log(message) => {},
     }
 }
+
+async fn process_command(command: Command) {
+    match command {
+        LogIn(username) => log_in(username), 
+        Play => insert_player,
+        Concede => {},
+        Stats => {},
+        _ => panic!("Unexpected command")
+    }
+}
+
+async fn process_move(user_move: String) {
+    
+}
+

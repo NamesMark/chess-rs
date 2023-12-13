@@ -4,7 +4,7 @@ use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
 use log::{info, error};
 
-use common::{Message, DEFAULT_HOST, DEFAULT_PORT};
+use common::{Message, DEFAULT_HOST, DEFAULT_PORT, Command};
 
 #[tokio::main]
 async fn main() {
@@ -30,7 +30,7 @@ async fn start_client(host: &str, port: &str) {
 }
 
 async fn get_input(stream: &mut tokio::net::TcpStream) {
-    println!("Please enter your message (format: .file <path>, .image <path>, <any text>):");
+    println!("Please enter your command, chat message, or chess move.");
     
     loop {
         print!("> ");
@@ -47,32 +47,23 @@ async fn get_input(stream: &mut tokio::net::TcpStream) {
         }
 
         let trimmed = line.trim();
-        let message = if trimmed.starts_with(".file ") {
-            let components: Vec<&str> = trimmed[6..].trim().split(&['/', '\\'][..]).collect();
-            let filename = components.last().unwrap_or(&"");
-            let path = trimmed[6..].trim().to_string();
-            match tokio::fs::read(&path).await {
-                Ok(data) => Message::File(filename.to_string(), data),
-                Err(e) => {
-                    error!("Failed to read file: {}", e);
-                    continue;
-                }
+        let message = if trimmed.starts_with("/") {
+            if (trimmed.starts_with("/log")) {
+
+                Message::Command(Command::LogIn(("default".to_string()))) // !TODO proper username
+            } else if (trimmed.starts_with("/play")) {
+                Message::Command(Command::Play)
+            } else if (trimmed.starts_with("/stat")) {
+                Message::Command(Command::Stats)
+            } else {
+                error!("Unrecognized command. Please use one of the following: /log in, /play, /stats");
+                continue;
             }
 
-        } else if trimmed.starts_with(".image ") {
-            let components: Vec<&str> = trimmed[6..].trim().split(&['/', '\\'][..]).collect();
-            let filename = components.last().unwrap_or(&"");
-            let path = trimmed[7..].trim().to_string();
-            match tokio::fs::read(&path).await {
-                Ok(data) => Message::Image(filename.to_string(), data),
-                Err(e) => {
-                    error!("Failed to read image: {}", e);
-                    continue;
-                }
-            }
-
+        } else if trimmed.starts_with(":") {
+            Message::Text(trimmed[1..].to_string())
         } else {
-            Message::Text(trimmed.to_string())
+            Message::Move(trimmed.to_string())
         };
 
         match send_message(stream, &message).await {

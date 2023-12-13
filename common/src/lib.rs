@@ -1,6 +1,9 @@
-//use std::fmt;
 use serde::{Serialize, Deserialize};
-//use log::info;
+use chess::{Board, ChessMove, Color, Piece, Square, MoveGen};
+use std::io::{self, Write};
+use std::str::FromStr;
+use env_logger::Env;
+use log::{info, error, debug};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "11111";
@@ -22,4 +25,40 @@ pub enum Command {
     Play,    // `/play`
     Concede, // `/concede`
     Stats,
+}
+
+pub fn piece_to_unicode(piece: Option<(Piece, Color)>) -> char {
+    match piece {
+        Some((Piece::Pawn, Color::White)) => '♙',
+        Some((Piece::Knight, Color::White)) => '♘',
+        Some((Piece::Bishop, Color::White)) => '♗',
+        Some((Piece::Rook, Color::White)) => '♖',
+        Some((Piece::Queen, Color::White)) => '♕',
+        Some((Piece::King, Color::White)) => '♔',
+        Some((Piece::Pawn, Color::Black)) => '♟',
+        Some((Piece::Knight, Color::Black)) => '♞',
+        Some((Piece::Bishop, Color::Black)) => '♝',
+        Some((Piece::Rook, Color::Black)) => '♜',
+        Some((Piece::Queen, Color::Black)) => '♛',
+        Some((Piece::King, Color::Black)) => '♚',
+        None => ' ',
+    }
+}
+
+pub fn print_board(board: &Board) {
+    println!("     A  B  C  D  E  F  G  H ");
+    println!("   ┌──┬──┬──┬──┬──┬──┬──┬──┐");
+    for rank in (1..=8).rev() {
+        print!(" {} │", rank);
+        for file in 'a'..='h' {
+            let square = Square::from_str(&format!("{}{}", file, rank)).unwrap();
+            let piece = board.piece_on(square);
+            let color = board.color_on(square);
+            print!("{} │", piece_to_unicode(piece.zip(color)));
+        }
+        if rank > 1 {
+            println!("\n   ├──┼──┼──┼──┼──┼──┼──┼──┤"); 
+        }
+    }
+    println!("\n   └──┴──┴──┴──┴──┴──┴──┴──┘");
 }
