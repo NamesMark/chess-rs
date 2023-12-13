@@ -1,11 +1,15 @@
-use std::process::Command;
+//use std::process::Command;
+
+mod chess;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::io::Write;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::io::AsyncReadExt;
+use tokio::io::{self, AsyncReadExt};
 use tokio::fs;
 use tokio::signal;
 use tokio::sync::broadcast;
@@ -74,9 +78,10 @@ async fn start_server(host: String, port: String, mut shutdown_signal: broadcast
     loop {
         tokio::select! {
             Ok((socket, _)) = listener.accept() => {
+                let server_state_clone = server_state.clone();
                 tokio::spawn(async move {
                     info!("New connection: {}", socket.peer_addr().unwrap());
-                    handle_client(socket, server_state.clone()).await;
+                    handle_client(socket, server_state_clone).await;
                 });
             }
             _ = shutdown_signal.recv() => {
@@ -89,37 +94,42 @@ async fn start_server(host: String, port: String, mut shutdown_signal: broadcast
 
 async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     let mut len_bytes = [0u8; 4];
-    if let Err(e) = socket.read_exact(&mut len_bytes).await {
-        error!("Failed to read message length: {}", e);
-        return;
-    }
-    let len = u32::from_be_bytes(len_bytes) as usize;
-    info!("Message length received: {}", len);
 
-    if len > 10 * 1024 * 1024 { 
-        error!("Message length too large: {}", len);
-        return;
-    }
-
-    let mut buffer = vec![0u8; len];
-    info!("Buffer allocated with length: {}", buffer.len());
-    match socket.read_exact(&mut buffer).await {
-        Ok(_) => {
-            info!("Message received, length: {}", buffer.len());
-            match serde_cbor::from_slice(&buffer) {
-                Ok(message) => {
-                    info!("Received message: {:?}", message);
-                    process_message(message, &mut socket, server_state).await;
-                }
-                Err(e) => {
-                    error!("Deserialization error: {}", e);
-                    error!("Raw data: {:?}", buffer);
+    loop {
+        
+        if let Err(e) = socket.read_exact(&mut len_bytes).await {
+            error!("Failed to read message length: {}", e);
+            return;
+        }
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        info!("Message length received: {}", len);
+    
+        if len > 10 * 1024 * 1024 { 
+            error!("Message length too large: {}", len);
+            return;
+        }
+    
+        let mut buffer = vec![0u8; len];
+        info!("Buffer allocated with length: {}", buffer.len());
+        match socket.read_exact(&mut buffer).await {
+            Ok(_) => {
+                info!("Message received, length: {}", buffer.len());
+                match serde_cbor::from_slice(&buffer) {
+                    Ok(message) => {
+                        info!("Received message: {:?}", message);
+                        process_message(message, &mut socket, server_state.clone()).await;
+                    }
+                    Err(e) => {
+                        error!("Deserialization error: {}", e);
+                        error!("Raw data: {:?}", buffer);
+                    }
                 }
             }
+            Err(e) => {
+                error!("Failed to read message: {}", e);
+            }
         }
-        Err(e) => {
-            error!("Failed to read message: {}", e);
-        }
+
     }
 }
 
@@ -136,42 +146,90 @@ async fn process_message(message: Message, socket: &mut TcpStream, server_state:
 
 async fn process_command(command: Command, socket: &mut TcpStream, server_state: Arc<ServerState>) {
     match command {
-        LogIn(username) => if authenticate(username) {
-            send_message(/*which stream?*/todo!(), Message::Log(format!("Authenticated successfully. Welcome back, {username}. To start a game, write /play.")));
-        } else {
-            register(username);
-            send_message(/*which stream?*/todo!(), Message::Log(format!("Registered a new user. Welcome, {username}! Hope you'll like our chess server. To start a game, write /play.")));
+        Command::LogIn(username) => {
+            if authenticate(&username).await {
+                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.try_clone().unwrap());
+                send_message(socket, &Message::Log(format!("Authenticated successfully. Welcome back, {}.", username))).await.unwrap();
+            } else {
+                register(&username);
+                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.try_clone().unwrap());
+                send_message(socket, &Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username))).await.unwrap();
+            }
         }, 
-        Play => assign_to_game(),
-        Concede => {},
-        Stats => {},
-        _ => panic!("Unexpected command {command}.")
+        Command::Play => // how do I know the username at this point? I guess needed to add another HashMap to do a reverse lookup
+        todo!()
+         assign_to_game(&username, server_state.clone()).await,
+        Command::Concede => {},
+        Command::Stats => {},
+        _ => unreachable!("Unexpected command {command}")
     }
 }
 
-async fn authenticate(username: &str) {
-    if let file_contents = std::fs::read_to_string(USER_FILE) {
-        file_contents.lines().any(|line| line == username)
-    } else {
-        error!("Failed to open file to authenticate a user.");
+async fn authenticate(username: &str) -> bool {
+    match std::fs::read_to_string(USER_FILE) {
+        Ok(file_contents) => file_contents.lines().any(|line| line == username),
+        Err(e) => {
+            error!("Failed to open user file: {}", e);
+            false
+        }
     }
-    
 }
 
 fn register(username: &str) {
-    if let mut file = std::fs::OpenOptions::new()
+    match std::fs::OpenOptions::new()
         .append(true)
-        .open(USER_FILE) {          
-        writeln!(file, "{}", username).unwrap();
-    } else {
-        error!("Failed to open file to register a user.");
+        .open(USER_FILE) {
+            Ok(mut file) => {
+                if let Err(e) = writeln!(file, "{}", username) {
+                    error!("Failed to write to user file: {}", e);
+                }
+            }
+            Err(e) => error!("Failed to open user file for writing: {}", e),
     }
 }
 
 async fn process_move(user_move: String, socket: &mut TcpStream, server_state: Arc<ServerState>) {
-    
+    todo!()
 }
 
-async fn start_game() {
-    
+async fn start_game(username: String, server_state: Arc<ServerState>) {
+    let games = server_state.games.lock().unwrap();
+    if let Some(game) = games.get(&username) {
+
+        todo!("Init the board, etc.");
+        info!("Starting game for user: {}", username);
+    }
+
+    todo!("Send initial game state to both players");
+}
+
+async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
+    let mut games = server_state.games.lock().unwrap();
+    let mut user_game_assigned = false;
+
+    // Find an existing game with a player slot open
+    for game in games.values_mut() {
+        if game.white.is_none() {
+            game.white = Some(username.clone());
+            user_game_assigned = true;
+            break;
+        } else if game.black.is_none() {
+            game.black = Some(username.clone());
+            user_game_assigned = true;
+            break;
+        }
+    }
+
+    // If no open games, create a new one
+    if !user_game_assigned {
+        let new_game = Game {
+            white: Some(username.clone()),
+            black: None,
+        };
+        games.insert(username, new_game);
+    }
+
+    if let Some(socket) = server_state.user_connections.lock().unwrap().get_mut(&username) {
+        send_message(socket, &Message::Log(format!("You're in a game now!"))).await.unwrap();
+    }
 }
