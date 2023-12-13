@@ -4,7 +4,8 @@ use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
 use log::{info, error};
 
-use common::{Message, DEFAULT_HOST, DEFAULT_PORT, Command};
+use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, send_message};
+use common::chess_utils::{print_board, piece_to_unicode};
 
 #[tokio::main]
 async fn main() {
@@ -74,14 +75,15 @@ async fn get_input(stream: &mut tokio::net::TcpStream) {
     }
 }
 
-async fn send_message(stream: &mut TcpStream, message: &Message) -> io::Result<()> {
-    let serialized_message = serde_cbor::to_vec(&message)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    let len = serialized_message.len() as u32;
-    let len_bytes = len.to_be_bytes();
 
-    stream.write_all(&len_bytes).await?; 
-    stream.write_all(&serialized_message).await?;
 
-    Ok(())
+async fn process_message(message: Message) {
+    match message {
+        Message::Command(command) => panic!("Expected Board, Text, Log, received Command"),
+        Message::Move(user_move) => panic!("Expected Board, Text, Log, received Move"),
+        Message::Text(text) => {},
+        Message::Board(board_string) => {},
+        Message::Error(e) => {},
+        Message::Log(message) => {},
+    }
 }

@@ -1,9 +1,6 @@
 use serde::{Serialize, Deserialize};
-use chess::{Board, ChessMove, Color, Piece, Square, MoveGen};
-use std::io::{self, Write};
-use std::str::FromStr;
-use env_logger::Env;
-use log::{info, error, debug};
+
+use chess_utils;
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "11111";
@@ -27,38 +24,15 @@ pub enum Command {
     Stats,
 }
 
-pub fn piece_to_unicode(piece: Option<(Piece, Color)>) -> char {
-    match piece {
-        Some((Piece::Pawn, Color::White)) => '♙',
-        Some((Piece::Knight, Color::White)) => '♘',
-        Some((Piece::Bishop, Color::White)) => '♗',
-        Some((Piece::Rook, Color::White)) => '♖',
-        Some((Piece::Queen, Color::White)) => '♕',
-        Some((Piece::King, Color::White)) => '♔',
-        Some((Piece::Pawn, Color::Black)) => '♟',
-        Some((Piece::Knight, Color::Black)) => '♞',
-        Some((Piece::Bishop, Color::Black)) => '♝',
-        Some((Piece::Rook, Color::Black)) => '♜',
-        Some((Piece::Queen, Color::Black)) => '♛',
-        Some((Piece::King, Color::Black)) => '♚',
-        None => ' ',
-    }
+async fn send_message(stream: &mut TcpStream, message: &Message) -> io::Result<()> {
+    let serialized_message = serde_cbor::to_vec(&message)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let len = serialized_message.len() as u32;
+    let len_bytes = len.to_be_bytes();
+
+    stream.write_all(&len_bytes).await?; 
+    stream.write_all(&serialized_message).await?;
+
+    Ok(())
 }
 
-pub fn print_board(board: &Board) {
-    println!("     A  B  C  D  E  F  G  H ");
-    println!("   ┌──┬──┬──┬──┬──┬──┬──┬──┐");
-    for rank in (1..=8).rev() {
-        print!(" {} │", rank);
-        for file in 'a'..='h' {
-            let square = Square::from_str(&format!("{}{}", file, rank)).unwrap();
-            let piece = board.piece_on(square);
-            let color = board.color_on(square);
-            print!("{} │", piece_to_unicode(piece.zip(color)));
-        }
-        if rank > 1 {
-            println!("\n   ├──┼──┼──┼──┼──┼──┼──┼──┤"); 
-        }
-    }
-    println!("\n   └──┴──┴──┴──┴──┴──┴──┴──┘");
-}
