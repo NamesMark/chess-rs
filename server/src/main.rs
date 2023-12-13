@@ -19,14 +19,15 @@ use log::{info, error};
 
 use chess::{Game};
 
-use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, send_message};
+use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command};
 use common::chess_utils::{print_board, piece_to_unicode};
 
 const USER_FILE: String = "database/usernames.txt".to_string();
 
 struct ServerState {
-    user_connections: Arc<Mutex<HashMap<String, SocketAddr>>>, // Thread-safe mapping between tcp connections and usernames 
-    stream_to_user: Arc<Mutex<HashMap<SocketAddr, String>>>, // reverse mapping to identify which user the message is coming from
+    user_connections: Arc<Mutex<HashMap<String, mpsc::Sender<Message>>>>, // mapping to know the channel through which to send messages to a user 
+    anon_user_connections: Arc<Mutex<HashMap<SocketAddr, mpsc::Sender<Message>>>>, // kill me
+    addr_to_user: Arc<Mutex<HashMap<SocketAddr, String>>>, // reverse mapping to identify which user the message is coming from
     games: Arc<Mutex<HashMap<String, Game>>>, 
 }
 
@@ -34,7 +35,8 @@ impl ServerState {
     fn new() -> Self {
         Self {
             user_connections: Arc::new(Mutex::new(HashMap::new())),
-            stream_to_user: Arc::new(Mutex::new(HashMap::new())),
+            anon_user_connections: Arc::new(Mutex::new(HashMap::new())),
+            addr_to_user: Arc::new(Mutex::new(HashMap::new())),
             games: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -104,44 +106,80 @@ async fn start_server(host: String, port: String, mut shutdown_signal: broadcast
 }
 
 async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
-    let mut len_bytes = [0u8; 4];
+    let (tx, mut rx) = mpsc::channel::<Message>(100); // Channel for communication
+    let socket_addr = match socket.peer_addr() {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("Failed to get user address: {}", e);
+            return;
+        }
+    };
 
-    loop {
+    server_state.anon_user_connections.lock().unwrap().insert(socket_addr, tx);
+    
+    let read_task = tokio::spawn(async move {
+        loop {
+            let mut len_bytes = [0u8; 4];
+
+            if let Err(e) = socket.read_exact(&mut len_bytes).await {
+                error!("Failed to read message length: {}", e);
+                return;
+            }
+            let len = u32::from_be_bytes(len_bytes) as usize;
+            info!("Message length received: {}", len);
         
-        if let Err(e) = socket.read_exact(&mut len_bytes).await {
-            error!("Failed to read message length: {}", e);
-            return;
-        }
-        let len = u32::from_be_bytes(len_bytes) as usize;
-        info!("Message length received: {}", len);
-    
-        if len > 10 * 1024 * 1024 { 
-            error!("Message length too large: {}", len);
-            return;
-        }
-    
-        let mut buffer = vec![0u8; len];
-        info!("Buffer allocated with length: {}", buffer.len());
-        match socket.read_exact(&mut buffer).await {
-            Ok(_) => {
-                info!("Message received, length: {}", buffer.len());
-                match serde_cbor::from_slice(&buffer) {
-                    Ok(message) => {
-                        info!("Received message: {:?}", message);
-                        process_message(message, &mut socket, server_state.clone()).await;
-                    }
-                    Err(e) => {
-                        error!("Deserialization error: {}", e);
-                        error!("Raw data: {:?}", buffer);
+            if len > 10 * 1024 * 1024 { 
+                error!("Message length too large: {}", len);
+                return;
+            }
+        
+            let mut buffer = vec![0u8; len];
+            info!("Buffer allocated with length: {}", buffer.len());
+            match socket.read_exact(&mut buffer).await {
+                Ok(_) => {
+                    info!("Message received, length: {}", buffer.len());
+                    match serde_cbor::from_slice(&buffer) {
+                        Ok(message) => {
+                            info!("Received message: {:?}", message);
+                            process_message(message, &mut socket, server_state.clone()).await;
+                        }
+                        Err(e) => {
+                            error!("Deserialization error: {}", e);
+                            error!("Raw data: {:?}", buffer);
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                error!("Failed to read message: {}", e);
+                Err(e) => {
+                    error!("Failed to read message: {}", e);
+                }
             }
         }
+    });
 
-    }
+    let write_task = tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            let serialized_message = match serde_cbor::to_vec(&message) {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Failed to serialize message: {}", e);
+                    continue;
+                }
+            };
+
+            let len_bytes = (serialized_message.len() as u32).to_be_bytes();
+            if writer.write_all(&len_bytes).await.is_err() {
+                break;
+            }
+            if writer.write_all(&serialized_message).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let _ = tokio::try_join!(read_task, write_task);
+
+    server_state.user_connections.lock().unwrap().remove(&socket_addr.to_string());
+
 }
 
 async fn process_message(message: Message, socket: &mut TcpStream, server_state: Arc<ServerState>) {
@@ -154,7 +192,11 @@ async fn process_message(message: Message, socket: &mut TcpStream, server_state:
                 error!("User not found");
             }
         },
-        Message::Text(text) => println!("Received the following text message: {}", text),
+        Message::Text(text) => {
+            info!("Received the following text message: {}", text)
+            // find game
+            // relay chat message to the user's opponent
+        },
         Message::Board(board_string) => panic!("Expected Command, Move or Text, received Board"),
         Message::Error(e) => {},
         Message::Log(message) => {},
@@ -162,18 +204,20 @@ async fn process_message(message: Message, socket: &mut TcpStream, server_state:
 }
 
 fn identify_user_by_add(socket_addr: &SocketAddr, server_state: Arc<ServerState>) -> Option<String> {
-    return server_state.stream_to_user.lock().unwrap().get(&socket_addr).cloned()
+    return server_state.addr_to_user.lock().unwrap().get(&socket_addr).cloned()
 }
 
-async fn process_command(command: Command, socket: &mut TcpStream, server_state: Arc<ServerState>) {
+async fn process_command(command: Command, socket_addr: SocketAddr, server_state: Arc<ServerState>) {
     match command {
         Command::LogIn(username) => {
             if authenticate(&username).await {
-                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.peer_addr().unwrap());
+                server_state.anon_user_connections.lock().unwrap().remove(&socket_addr);
+                server_state.user_connections.lock().unwrap().insert(username.clone(), tx);
                 send_message(socket, &Message::Log(format!("Authenticated successfully. Welcome back, {}.", username))).await.unwrap();
             } else {
                 register(&username);
-                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.peer_addr().unwrap());
+                server_state.anon_user_connections.lock().unwrap().remove(&socket_addr);
+                server_state.user_connections.lock().unwrap().insert(username.clone(), tx);
                 send_message(socket, &Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username))).await.unwrap();
             }
         }, 
@@ -271,6 +315,10 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
     }
 
     if let Some(socket) = server_state.user_connections.lock().unwrap().get_mut(&username) {
-        send_message(socket, &Message::Log(format!("You're in a game now!"))).await.unwrap();
+        send_message(socket, Message::Log(format!("You're in a game now!"))).await.unwrap();
     }
+}
+
+pub async fn send_message(sender: &mpsc::Sender<Message>, message: Message) -> Result<(), mpsc::error::SendError<Message>> {
+    sender.send(message).await
 }
