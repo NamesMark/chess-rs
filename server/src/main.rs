@@ -7,13 +7,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::io::Write;
+use std::net::SocketAddr;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{self, AsyncReadExt};
 use tokio::fs;
 use tokio::signal;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use log::{info, error};
+
+use chess::{Game};
 
 use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, send_message};
 use common::chess_utils::{print_board, piece_to_unicode};
@@ -21,26 +25,33 @@ use common::chess_utils::{print_board, piece_to_unicode};
 const USER_FILE: String = "database/usernames.txt".to_string();
 
 struct ServerState {
-    user_connections: Arc<Mutex<HashMap<String, TcpStream>>>, // Thread-safe mapping between tcp connections and usernames 
-    games: Arc<Mutex<HashMap<String, GameSession>>>, 
-}
-
-#[derive(Debug)]
-struct Game {
-    white: Option<String>,
-    black: Option<String>,
+    user_connections: Arc<Mutex<HashMap<String, SocketAddr>>>, // Thread-safe mapping between tcp connections and usernames 
+    stream_to_user: Arc<Mutex<HashMap<SocketAddr, String>>>, // reverse mapping to identify which user the message is coming from
+    games: Arc<Mutex<HashMap<String, Game>>>, 
 }
 
 impl ServerState {
     fn new() -> Self {
         Self {
             user_connections: Arc::new(Mutex::new(HashMap::new())),
+            stream_to_user: Arc::new(Mutex::new(HashMap::new())),
             games: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     // TODO user connections, game session assignments, etc etc
 }
+
+struct Connection {
+    tx: mpsc::Sender<Message>, // Sender channel
+}
+
+impl Connection {
+    async fn send_message(&self, message: Message) {
+        self.tx.send(message).await.unwrap();
+    }
+}
+
 
 
 #[tokio::main]
@@ -136,7 +147,13 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
 async fn process_message(message: Message, socket: &mut TcpStream, server_state: Arc<ServerState>) {
     match message {
         Message::Command(command) => process_command(command, socket, server_state).await,
-        Message::Move(user_move) => process_move(user_move, socket, server_state).await,
+        Message::Move(user_move) => {
+            if let Some(username) = identify_user_by_add(&socket.peer_addr().unwrap(), server_state) {
+                process_move(user_move, username, server_state.clone()).await;
+            } else {
+                error!("User not found");
+            }
+        },
         Message::Text(text) => println!("Received the following text message: {}", text),
         Message::Board(board_string) => panic!("Expected Command, Move or Text, received Board"),
         Message::Error(e) => {},
@@ -144,21 +161,36 @@ async fn process_message(message: Message, socket: &mut TcpStream, server_state:
     }
 }
 
+fn identify_user_by_add(socket_addr: &SocketAddr, server_state: Arc<ServerState>) -> Option<String> {
+    return server_state.stream_to_user.lock().unwrap().get(&socket_addr).cloned()
+}
+
 async fn process_command(command: Command, socket: &mut TcpStream, server_state: Arc<ServerState>) {
     match command {
         Command::LogIn(username) => {
             if authenticate(&username).await {
-                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.try_clone().unwrap());
+                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.peer_addr().unwrap());
                 send_message(socket, &Message::Log(format!("Authenticated successfully. Welcome back, {}.", username))).await.unwrap();
             } else {
                 register(&username);
-                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.try_clone().unwrap());
+                server_state.user_connections.lock().unwrap().insert(username.clone(), socket.peer_addr().unwrap());
                 send_message(socket, &Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username))).await.unwrap();
             }
         }, 
-        Command::Play => // how do I know the username at this point? I guess needed to add another HashMap to do a reverse lookup
-        todo!()
-         assign_to_game(&username, server_state.clone()).await,
+        Command::Play => {
+            if let Ok(socket_addr) = socket.peer_addr() {
+                if let Some(username) = identify_user_by_add(&socket_addr, server_state.clone()) {
+                    assign_to_game(username, server_state.clone()).await;
+                } else {
+                    error!("Failed to get username from the server state (unregistered player tried to play).");
+                    send_message(socket, &Message::Error("Anonymous users cannot start games. Please use /log in.".to_string())).await.unwrap();
+                }
+            } else {
+                error!("Failed to get user's address.");
+                // connection dropped? do I do anything else?
+            }
+
+        },
         Command::Concede => {},
         Command::Stats => {},
         _ => unreachable!("Unexpected command {command}")
@@ -188,12 +220,20 @@ fn register(username: &str) {
     }
 }
 
-async fn process_move(user_move: String, socket: &mut TcpStream, server_state: Arc<ServerState>) {
-    todo!()
+async fn process_move(user_move: String, username: String, server_state: Arc<ServerState>) {
+    let mut games = server_state.games.lock().unwrap();
+    if let Some(game) = games.get_mut(&username) {
+        match game.make_move(&user_move) {
+            Ok(_) => info!("Move made: {}", user_move),
+            Err(err_msg) => error!("{}", err_msg),
+        }
+    }
 }
 
 async fn start_game(username: String, server_state: Arc<ServerState>) {
-    let games = server_state.games.lock().unwrap();
+    let mut games = server_state.games.lock().unwrap();
+    games.entry(username).or_insert_with(Game::new);
+
     if let Some(game) = games.get(&username) {
 
         todo!("Init the board, etc.");
@@ -225,6 +265,7 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
         let new_game = Game {
             white: Some(username.clone()),
             black: None,
+            ..
         };
         games.insert(username, new_game);
     }

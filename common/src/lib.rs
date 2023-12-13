@@ -1,6 +1,11 @@
-use serde::{Serialize, Deserialize};
+pub mod chess_utils;
 
-use chess_utils;
+use std::fmt;
+
+use serde::{Serialize, Deserialize};
+use tokio::io::{self, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "11111";
@@ -24,7 +29,19 @@ pub enum Command {
     Stats,
 }
 
-async fn send_message(stream: &mut TcpStream, message: &Message) -> io::Result<()> {
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Command::LogIn(username) => write!(f, "LogIn({})", username),
+            Command::Play => write!(f, "Play"),
+            Command::Concede => write!(f, "Concede"),
+            Command::Stats => write!(f, "Stats"),
+            _ => unreachable!("Unexpected new command")
+        }
+    }
+}
+
+pub async fn send_message(stream: &mut TcpStream, message: &Message) -> io::Result<()> {
     let serialized_message = serde_cbor::to_vec(&message)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     let len = serialized_message.len() as u32;

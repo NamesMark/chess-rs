@@ -4,6 +4,41 @@ use std::str::FromStr;
 use env_logger::Env;
 use log::{info, error, debug};
 
+#[derive(Debug)]
+pub struct Game {
+    board: Board,
+    current_turn: Color,
+    pub white: Option<String>,
+    pub black: Option<String>,
+}
+
+impl Game {
+    pub fn new() -> Self {
+        Self {
+            board: Board::default(),
+            current_turn: Color::White,
+            white: None,
+            black: None,
+        }
+    }
+    
+    pub fn make_move(&mut self, move_str: &str) -> Result<(), String> {
+        match ChessMove::from_str(move_str) {
+            Ok(mov) => {
+                if self.board.legal(mov) {
+                    self.board = self.board.make_move_new(mov);
+                    self.current_turn = !self.current_turn;
+                    Ok(())
+                } else {
+                    Err("Invalid move.".to_string())
+                }
+            }
+            Err(_) => Err("Couldn't parse move.".to_string()),
+        }
+    }
+}
+
+
 pub fn start_game() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 

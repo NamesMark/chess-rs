@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use chess::{Board, Color, Piece, Square};
 
 pub fn piece_to_unicode(piece: Option<(Piece, Color)>) -> char {
