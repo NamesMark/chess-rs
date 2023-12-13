@@ -4,12 +4,23 @@ use std::str::FromStr;
 use env_logger::Env;
 use log::{info, error, debug};
 
+use common::chess_utils::{print_board, piece_to_unicode};
+
 #[derive(Debug)]
 pub struct Game {
-    board: Board,
-    current_turn: Color,
+    pub board: Board,
+    pub current_turn: Color,
     pub white: Option<String>,
     pub black: Option<String>,
+    pub status: GameStatus,
+}
+
+#[derive(Debug)]
+pub enum GameStatus {
+    Pending,
+    InProgress,
+    Finished,
+    Cancelled
 }
 
 impl Game {
@@ -19,9 +30,10 @@ impl Game {
             current_turn: Color::White,
             white: None,
             black: None,
+            status: GameStatus::Pending,
         }
     }
-    
+
     pub fn make_move(&mut self, move_str: &str) -> Result<(), String> {
         match ChessMove::from_str(move_str) {
             Ok(mov) => {
