@@ -3,9 +3,10 @@ pub mod chess_utils;
 use std::fmt;
 
 use serde::{Serialize, Deserialize};
-use tokio::io::{self, AsyncWriteExt};
+use tokio::io::{self, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
-
+use tokio::net::tcp::{OwnedReadHalf};
+use log::{info, error};
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "11111";
@@ -41,3 +42,42 @@ impl fmt::Display for Command {
     }
 }
 
+pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> io::Result<Message> {
+    loop {
+        let mut len_bytes = [0u8; 4];
+
+        if let Err(e) = reader.read_exact(&mut len_bytes).await {
+            error!("Failed to read message length: {}", e);
+            return Err(e);
+        }
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        info!("Message length received: {}", len);
+
+        if len > 10 * 1024 * 1024 { 
+            error!("Message length too large: {}", len);
+            return Err(io::Error::new(io::ErrorKind::Other, "Message length too large"));
+        }
+
+        let mut buffer = vec![0u8; len];
+        info!("Buffer allocated with length: {}", buffer.len());
+
+        match reader.read_exact(&mut buffer).await {
+            Ok(_) => {
+                info!("Message received, length: {}", buffer.len());
+                match serde_cbor::from_slice(&buffer) {
+                    Ok(message) => {
+                        info!("Received message: {:?}", message);
+                        message
+                    }
+                    Err(e) => {
+                        error!("Deserialization error: {}", e);
+                        error!("Raw data: {:?}", buffer);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to read message: {}", e);
+            }
+        }
+    }
+}

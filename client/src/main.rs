@@ -11,7 +11,7 @@ use log::{info, error};
 use regex::Regex;
 
 
-use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT};
+use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
 
 lazy_static! {
@@ -52,39 +52,10 @@ async fn start_client(host: &str, port: &str) {
 
 async fn listen_to_server_messages(reader: &mut OwnedReadHalf) {
     loop {
-        let mut len_bytes = [0u8; 4];
-
-        if let Err(e) = reader.read_exact(&mut len_bytes).await {
-            error!("Failed to read message length: {}", e);
-            return;
-        }
-        let len = u32::from_be_bytes(len_bytes) as usize;
-        info!("Message length received: {}", len);
-
-        if len > 10 * 1024 * 1024 { 
-            error!("Message length too large: {}", len);
-            return;
-        }
-
-        let mut buffer = vec![0u8; len];
-        info!("Buffer allocated with length: {}", buffer.len());
-
-        match reader.read_exact(&mut buffer).await {
-            Ok(_) => {
-                info!("Message received, length: {}", buffer.len());
-                match serde_cbor::from_slice(&buffer) {
-                    Ok(message) => {
-                        info!("Received message: {:?}", message);
-                        process_message(message).await;
-                    }
-                    Err(e) => {
-                        error!("Deserialization error: {}", e);
-                        error!("Raw data: {:?}", buffer);
-                    }
-                }
-            }
+        match listen_to_messages(reader).await {
+            Ok(message) => process_message(message).await,
             Err(e) => {
-                error!("Failed to read message: {}", e);
+                error!("Error while listening to messages: {}", e);
             }
         }
     }

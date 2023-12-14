@@ -10,6 +10,7 @@ use std::io::Write;
 use std::net::SocketAddr;
 
 use tokio::net::{TcpListener, TcpStream};
+use tokio::net::tcp::{OwnedReadHalf};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::fs;
 use tokio::signal;
@@ -22,7 +23,7 @@ use chess::Board;
 
 use crate::chess_game::{Game};
 
-use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command};
+use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode};
 
 const USER_FILE: &str = "database/usernames.txt";
@@ -145,42 +146,7 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     let server_state_clone = Arc::clone(&server_state);
     
     let read_task = tokio::spawn(async move {
-        loop {
-            let mut len_bytes = [0u8; 4];
-
-            if let Err(e) = reader.read_exact(&mut len_bytes).await {
-                error!("Failed to read message length: {}", e);
-                return;
-            }
-            let len = u32::from_be_bytes(len_bytes) as usize;
-            info!("Message length received: {}", len);
-        
-            if len > 10 * 1024 * 1024 { 
-                error!("Message length too large: {}", len);
-                return;
-            }
-        
-            let mut buffer = vec![0u8; len];
-            info!("Buffer allocated with length: {}", buffer.len());
-            match reader.read_exact(&mut buffer).await {
-                Ok(_) => {
-                    info!("Message received, length: {}", buffer.len());
-                    match serde_cbor::from_slice(&buffer) {
-                        Ok(message) => {
-                            info!("Received message: {:?}", message);
-                            process_message(message, &socket_addr, server_state_clone.clone()).await;
-                        }
-                        Err(e) => {
-                            error!("Deserialization error: {}", e);
-                            error!("Raw data: {:?}", buffer);
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to read message: {}", e);
-                }
-            }
-        }
+        listen_to_client_messages(&mut reader, &socket_addr, server_state_clone).await;
     });
 
     let write_task = tokio::spawn(async move {
@@ -225,6 +191,17 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     }
 
     
+}
+
+async fn listen_to_client_messages(reader: &mut OwnedReadHalf, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
+    loop {
+        match listen_to_messages(reader).await {
+            Ok(message) => process_message(message, socket_addr, server_state.clone()).await,
+            Err(e) => {
+                error!("Error while listening to messages: {}", e);
+            }
+        }
+    }
 }
 
 async fn process_message(message: Message, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
