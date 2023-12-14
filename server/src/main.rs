@@ -174,7 +174,7 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     {
         let mut anon_user_connections = server_state.anon_user_connections.lock().await;
         if let Some(sender) = anon_user_connections.get(&socket_addr) {
-            sender.send(Message::Log("You have been disconnected. Bye!".to_string()));
+            let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await;
         }
         anon_user_connections.remove(&socket_addr);
     }
@@ -184,7 +184,7 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
         let mut user_connections = server_state.user_connections.lock().await;
         if let Some(username) = username {
             if let Some(sender) = user_connections.get(&username) {
-                sender.send(Message::Log("You have been disconnected. Bye!".to_string()));
+                let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await;
             }
             user_connections.remove(&username);
         }

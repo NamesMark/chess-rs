@@ -10,12 +10,29 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use log::{info, error};
 use regex::Regex;
 
-
 use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
 
 lazy_static! {
     static ref MOVE_RE: Regex = Regex::new(r"[a-h][1-8][a-h][1-8]").unwrap();
+}
+
+struct GameState {
+    my_username: String,
+    in_game: bool,
+    my_turn: bool,
+    opponent_username: String,
+}
+
+impl GameState {
+    fn new() -> Self {
+        Self {
+            my_username: "".to_string(),
+            in_game: false,
+            my_turn: false,
+            opponent_username: "".to_string(),
+        }
+    }
 }
 
 #[tokio::main]
@@ -33,9 +50,12 @@ async fn start_client(host: &str, port: &str) {
     match tokio::net::TcpStream::connect(format!("{}:{}", host, port)).await {
         Ok(stream) => {
             info!("Successfully connected to server in port {}", port);
+
+            let game_state = GameState::new();
+
             let (mut reader, mut writer) = stream.into_split();
             let read_task = tokio::spawn(async move {
-                listen_to_server_messages(&mut reader).await;
+                listen_to_server_messages(&mut reader, &game_state).await;
             });
 
             let write_task = tokio::spawn(async move {
@@ -50,10 +70,10 @@ async fn start_client(host: &str, port: &str) {
     }
 }
 
-async fn listen_to_server_messages(reader: &mut OwnedReadHalf) {
+async fn listen_to_server_messages(reader: &mut OwnedReadHalf, game_state: &GameState) {
     loop {
         match listen_to_messages(reader).await {
-            Ok(message) => process_message(message).await,
+            Ok(message) => process_message(message, game_state).await,
             Err(e) => {
                 error!("Error while listening to messages: {}", e);
             }
@@ -122,11 +142,11 @@ async fn get_input(writer: &mut OwnedWriteHalf) {
 
 
 
-async fn process_message(message: Message) {
+async fn process_message(message: Message, game_state: &GameState) {
     match message {
         Message::Command(command) => panic!("Expected Board, Text, Log, received Command"),
         Message::Move(user_move) => panic!("Expected Board, Text, Log, received Move"),
-        Message::Text(text) => {},
+        Message::Text(text) => display_chat_message(text, game_state),
         Message::Board(board_string) => display_board(board_string),
         Message::Error(e) => {},
         Message::Log(message) => display_log_message(message),
@@ -151,4 +171,9 @@ fn display_board(board_string: String) {
 
 fn display_log_message(message: String) {
     println!("[SERVER] {message}");
+}
+
+fn display_chat_message(message: String, game_state: &GameState) {
+    let opponent = &game_state.opponent_username;
+    println!("[{opponent}]: {message}");
 }

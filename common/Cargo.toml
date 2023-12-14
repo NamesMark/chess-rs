@@ -10,4 +10,5 @@ chess = "3.2.0"
 log = "0.4.20"
 serde = { version = "1.0.190", features = ["derive"] }
 serde_cbor = "0.11.2"
+thiserror = "1.0.50"
 tokio = { version = "1.35.0", features = ["full"] }
