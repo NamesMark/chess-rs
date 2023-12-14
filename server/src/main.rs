@@ -16,6 +16,7 @@ use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::Sender;
 use log::{info, error};
 use chess::Board;
 
@@ -202,18 +203,6 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
         }
     });
 
-    // if let Some(sender) = server_state.anon_user_connections.lock().unwrap().get(&socket_addr) {
-    //     sender.send(Message::Log("You have been disconnected. Bye!".to_string()));
-    //     server_state.anon_user_connections.lock().unwrap().remove(&socket_addr);
-    // }
-
-    // if let Some(username) = identify_user_by_addr(&socket_addr, server_state.clone()) {
-    //     if let Some(sender) = server_state.user_connections.lock().unwrap().get(&username) {
-    //         sender.send(Message::Log("You have been disconnected. Bye!".to_string()));
-    //     }
-    //     server_state.user_connections.lock().unwrap().remove(&username);
-    // }
-
     let _ = tokio::try_join!(read_task, write_task);
 
     {
@@ -273,8 +262,10 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                 };
                 if let Some(sender) = sender {
                     let mut user_connections = server_state.user_connections.lock().await;
-                    user_connections.insert(username.clone(), sender);
-                    send_message(&username, Message::Log(format!("Authenticated successfully. Welcome back, {}.", username)), server_state.clone()).await;
+                    user_connections.insert(username.clone(), sender.clone());
+                    let mut addr_user = server_state.addr_to_user.lock().await;
+                    addr_user.insert(socket_addr.clone(), username.clone());
+                    send_message(&username, Message::Log(format!("Authenticated successfully. Welcome back, {}.", username)), server_state.clone(), &sender).await;
                 } else {
                     error!("Sender not found for socket address: {:?}", socket_addr);
                     //debugging:
@@ -285,7 +276,7 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
 
                 }
             } else {
-                register(&username);
+                register(&username).await;
                 let sender = {
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
@@ -296,9 +287,16 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     info!("Sender doesn't exist");
                 }
                 if let Some(sender) = sender {
+                    info!("Trying to insert the user into user_connections");
                     let mut user_connections = server_state.user_connections.lock().await;
                     user_connections.insert(username.clone(), sender.clone());
-                    send_message(&username, Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username)), server_state.clone()).await;
+                    let mut addr_user = server_state.addr_to_user.lock().await;
+                    addr_user.insert(socket_addr.clone(), username.clone());
+                    //debugging:
+                    {
+                        info!("Current user_connections: {:?}", user_connections.keys());
+                    }
+                    send_message(&username, Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username)), server_state.clone(), &sender).await;
                 } else {
                     error!("Tried registering. Sender not found for socket address: {:?}", socket_addr);
                     //debugging:
@@ -311,6 +309,7 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
         }, 
         Command::Play => {
             if let Some(username) = identify_user_by_addr(&socket_addr, server_state.clone()).await {
+                // TODO check if the player is already in game
                 assign_to_game(username, server_state.clone()).await;
             } else {
                 error!("Failed to get username from the server state (unregistered player tried to play).");
@@ -325,9 +324,14 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
 }
 
 async fn authenticate(username: &str) -> bool {
+    info!("Trying to authenticate {username}...");
     match tokio::fs::read_to_string(USER_FILE)
     .await {
-        Ok(file_contents) => file_contents.lines().any(|line| line == username),
+        Ok(file_contents) => {
+            let result = file_contents.lines().any(|line| line == username);
+            info!("Checked the file, found {username}: {result}");
+            result
+        },
         Err(e) => {
             error!("Failed to open user file: {}", e);
             false
@@ -386,10 +390,12 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
         if game.white.is_none() {
             game.white = Some(username.clone());
             user_game_assigned = true;
+            info!("{username} is now white in a game");
             break;
         } else if game.black.is_none() {
             game.black = Some(username.clone());
             user_game_assigned = true;
+            info!("{username} is now black in a game");
             break;
         }
     }
@@ -404,24 +410,28 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
             status: chess_game::GameStatus::Pending,
         };
         games.insert(username.clone(), new_game);
+        info!("New game created for {username}");
     }
 
-    if let Some(socket) = server_state.user_connections.lock().await.get_mut(&username) {
-        send_message(&username, Message::Log(format!("You're in a game now!")), server_state.clone()).await;
+    if let Some(sender) = server_state.user_connections.lock().await.get(&username) {
+        send_message(&username, Message::Log(format!("You're in a game now!")), server_state.clone(), sender).await;
     }
 }
 
-async fn send_message(username: &str, message: Message, server_state: Arc<ServerState>) {
-    let sender = {
-            let user_connections = server_state.user_connections.lock().await;
-            user_connections.get(username).cloned()
-        };
+async fn send_message(username: &str, message: Message, server_state: Arc<ServerState>, sender: &Sender<Message>) {
+    info!("Trying to send message {:?} to {username}", message);
+    // let sender = {
+    //         let user_connections = server_state.user_connections.lock().await;
+    //         user_connections.get(username).cloned()
+    //     };
 
-    if let Some(sender) = sender {
-        if let Err(e) = sender.send(message).await {
-            error!("Failed to send message to {}: {}", username, e);
-        }
-    } else {
-        error!("No active sender for username: {}", username);
+    //debugging:
+    {
+        info!("Sender is {:?}", sender);
     }
+
+    if let Err(e) = sender.send(message).await {
+        error!("Failed to send message to {}: {}", username, e);
+    }
+    info!("Successfully sent message to {username}");
 }

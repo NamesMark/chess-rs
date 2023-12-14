@@ -37,3 +37,7 @@ pub fn print_board(board: &Board) {
     }
     println!("\n   └──┴──┴──┴──┴──┴──┴──┴──┘");
 }
+
+pub fn board_from_string(board_string: String) -> Result<Board, chess::Error> {
+    Board::from_str(&board_string)
+}

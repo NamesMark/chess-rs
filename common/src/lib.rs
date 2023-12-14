@@ -41,14 +41,3 @@ impl fmt::Display for Command {
     }
 }
 
-pub async fn send_message(stream: &mut TcpStream, message: &Message) -> io::Result<()> {
-    let serialized_message = serde_cbor::to_vec(&message)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    let len = serialized_message.len() as u32;
-    let len_bytes = len.to_be_bytes();
-
-    stream.write_all(&len_bytes).await?; 
-    stream.write_all(&serialized_message).await?;
-
-    Ok(())
-}
