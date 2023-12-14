@@ -23,7 +23,7 @@ use chess::Board;
 
 use crate::chess_game::{Game};
 
-use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, listen_to_messages};
+use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, ChessError, make_io_error, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode};
 
 const USER_FILE: &str = "database/usernames.txt";
@@ -32,7 +32,7 @@ struct ServerState {
     user_connections: Arc<Mutex<HashMap<String, mpsc::Sender<Message>>>>, // mapping to know the channel through which to send messages to a user 
     anon_user_connections: Arc<Mutex<HashMap<SocketAddr, mpsc::Sender<Message>>>>, // kill me
     addr_to_user: Arc<Mutex<HashMap<SocketAddr, String>>>, // reverse mapping to identify which user the message is coming from
-    games: Arc<Mutex<HashMap<String, Game>>>, 
+    games: Arc<Mutex<HashMap<String, Game>>>, // username to Game
     user_file_mutex: Arc<Mutex<Option<tokio::fs::File>>>,
 }
 
@@ -196,32 +196,62 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
 async fn listen_to_client_messages(reader: &mut OwnedReadHalf, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
     loop {
         match listen_to_messages(reader).await {
-            Ok(message) => process_message(message, socket_addr, server_state.clone()).await,
+            Ok(message) => {
+                match process_message(message, socket_addr, server_state.clone()).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        error!("Error while processing messages: {}", e);
+                    }
+                }
+            }
+            
             Err(e) => {
                 error!("Error while listening to messages: {}", e);
+                break;
             }
         }
     }
 }
 
-async fn process_message(message: Message, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
+async fn process_message(message: Message, socket_addr: &SocketAddr, server_state: Arc<ServerState>) -> Result<(), ChessError> {
     match message {
         Message::Command(command) => process_command(command, socket_addr, server_state).await,
         Message::Move(user_move) => {
             if let Some(username) = identify_user_by_addr(socket_addr, server_state.clone()).await {
-                process_move(user_move, username, server_state.clone()).await;
+                process_move(user_move, username, server_state.clone()).await?;
+                Ok(())
             } else {
-                error!("User not found");
+                Err(ChessError::UserNotFoundError)
             }
         },
         Message::Text(text) => {
-            info!("Received the following text message: {}", text)
-            // find game
-            // relay chat message to the user's opponent
+            info!("Received the following text message: {}", text);
+            let username = identify_user_by_addr(socket_addr, server_state.clone()).await
+                .ok_or(ChessError::UserStateError("User not found".to_string()))?;
+            if let Some(opponent) = identify_opponent(username, server_state.clone()).await? {
+                if let Some(sender) = server_state.user_connections.lock().await.get(&opponent) {
+                    sender.send(Message::Text(text.clone())).await
+                        .map_err(|e| ChessError::MessageHandlingError(format!("Failed to send message: {}", e)))?;
+                }
+            }
+            Ok(())
         },
         Message::Board(board_string) => panic!("Expected Command, Move or Text, received Board"),
-        Message::Error(e) => {},
-        Message::Log(message) => {},
+        Message::Error(e) => panic!("Expected Command, Move or Text, received Error"),
+        Message::Log(message) => panic!("Expected Command, Move or Text, received Log"),
+    }
+}
+
+async fn identify_opponent(username: String, server_state: Arc<ServerState>) -> Result<Option<String>, ChessError> {
+    let games = server_state.games.lock().await;
+    if let Some(game) = games.get(&username) {
+        Ok(if game.black == Some(username) {
+            game.white.clone()
+        } else {
+            game.black.clone()
+        })
+    } else {
+        Err(ChessError::GameStateError("User not in game".to_string()))
     }
 }
 
@@ -229,10 +259,10 @@ async fn identify_user_by_addr(socket_addr: &SocketAddr, server_state: Arc<Serve
     return server_state.addr_to_user.lock().await.get(&socket_addr).cloned()
 }
 
-async fn process_command(command: Command, socket_addr: &SocketAddr, server_state: Arc<ServerState>) {
+async fn process_command(command: Command, socket_addr: &SocketAddr, server_state: Arc<ServerState>) -> Result<(), ChessError> {
     match command {
         Command::LogIn(username) => {
-            if authenticate(&username).await {
+            if authenticate(&username).await? {
                 let sender = {
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
@@ -243,13 +273,14 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     let mut addr_user = server_state.addr_to_user.lock().await;
                     addr_user.insert(socket_addr.clone(), username.clone());
                     send_message(&username, Message::Log(format!("Authenticated successfully. Welcome back, {}.", username)), server_state.clone(), &sender).await;
+                    Ok(())
                 } else {
-                    error!("Sender not found for socket address: {:?}", socket_addr);
                     //debugging:
                     {
                         let anon_connections = server_state.anon_user_connections.lock().await;
                         info!("Current anon_user_connections: {:?}", anon_connections.keys());
                     }
+                    Err(ChessError::SenderNotFoundError(format!("Sender not found for socket address: {:?}", socket_addr)))
 
                 }
             } else {
@@ -274,49 +305,68 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                         info!("Current user_connections: {:?}", user_connections.keys());
                     }
                     send_message(&username, Message::Log(format!("Registered a new user. Welcome, {}! Hope you are going to enjoy our chess server. Use /play to start your first game!", username)), server_state.clone(), &sender).await;
+                    Ok(())
                 } else {
-                    error!("Tried registering. Sender not found for socket address: {:?}", socket_addr);
                     //debugging:
                     {
                         let anon_connections = server_state.anon_user_connections.lock().await;
                         info!("Current anon_user_connections: {:?}", anon_connections.keys());
                     }
+                    Err(ChessError::SenderNotFoundError(format!("Tried registering. Sender not found for socket address: {:?}", socket_addr)))
                 }
             }
         }, 
         Command::Play => {
+            info!("Processing play command");
             if let Some(username) = identify_user_by_addr(&socket_addr, server_state.clone()).await {
-                // TODO check if the player is already in game
-                assign_to_game(username, server_state.clone()).await;
+                info!("Getting games");
+                let games = server_state.games.lock().await;
+                info!("Checking if user already in game");
+                if let Some(game) = games.get(&username) {
+                    let user_connections = server_state.user_connections.lock().await;
+                    if let Some(sender) = user_connections.get(&username).cloned() {
+                        let _ = send_message(&username, Message::Error("You cannot start a new game until this one is finished!".to_string()), server_state.clone(), &sender).await;
+                        return Ok(());
+                    } else {
+                        return Err(ChessError::UserNotFoundError);
+                    }
+                } 
             } else {
-                error!("Failed to get username from the server state (unregistered player tried to play).");
-                //send_message(&username, Message::Error("Anonymous users cannot start games. Please use /log in.".to_string()), server_state).await; //I'll handle it on the client
+                //send_message(&username, Message::Error("Anonymous users cannot start games. Please use /log in.".to_string()), server_state).await; // TODO handle it on the client? 
+                return Err(ChessError::UserStateError("Failed to get username from the server state (unregistered player tried to play).".to_string()));
             }
 
+            if let Some(username) = identify_user_by_addr(&socket_addr, server_state.clone()).await {
+                info!("Assigning to a game");
+                let _ = assign_to_game(username, server_state.clone()).await;
+                Ok(())
+            } else {
+                Err(ChessError::UserStateError("Failed to get username from the server state (unregistered player tried to play).".to_string()))
+            }
         },
-        Command::Concede => {},
-        Command::Stats => {},
+        Command::Concede => unimplemented!("TODO concede"),
+        Command::Stats => unimplemented!("TODO stats"),
         _ => unreachable!("Unexpected command {command}")
     }
 }
 
-async fn authenticate(username: &str) -> bool {
+async fn authenticate(username: &str) -> Result<bool, ChessError> {
     info!("Trying to authenticate {username}...");
     match tokio::fs::read_to_string(USER_FILE)
     .await {
         Ok(file_contents) => {
             let result = file_contents.lines().any(|line| line == username);
             info!("Checked the file, found {username}: {result}");
-            result
+            Ok(result)
         },
         Err(e) => {
-            error!("Failed to open user file: {}", e);
-            false
+            //Err(ChessError::AuthenticationError(format!("Failed to open user file: {}", e)))
+            Err(make_io_error(e, "Failed to open user file"))
         }
     }
 }
 
-async fn register(username: &str) {
+async fn register(username: &str) -> Result<bool, ChessError>  {
     info!("Trying to register {username}...");
     match tokio::fs::OpenOptions::new()
         .append(true)
@@ -325,23 +375,31 @@ async fn register(username: &str) {
             Ok(mut file) => {
                 let content = format!("{}\n", username);
                 if let Err(e) = file.write_all(content.as_bytes()).await {
-                    error!("Failed to write to user file: {}", e);
+                    Err(make_io_error(e, "Failed to write to user file"))
                 } else {
                     info!("Registered {username}.");
+                    Ok(true)
                 }
                 
+            },
+            Err(e) => {
+                Err(make_io_error(e, "Failed to open user file for writing"))
             }
-            Err(e) => error!("Failed to open user file for writing: {}", e),
     }
 }
 
-async fn process_move(user_move: String, username: String, server_state: Arc<ServerState>) {
+async fn process_move(user_move: String, username: String, server_state: Arc<ServerState>) -> Result<(), ChessError> {
     let mut games = server_state.games.lock().await;
     if let Some(game) = games.get_mut(&username) {
         match game.make_move(&user_move) {
-            Ok(_) => info!("Move made: {}", user_move),
-            Err(err_msg) => error!("{}", err_msg),
+            Ok(_) => {
+                info!("Move made: {}", user_move);
+                Ok(())
+            }
+            Err(err_msg) => Err(ChessError::GameStateError(err_msg)),
         }
+    } else {
+        Err(ChessError::GameStateError(format!("User {} is not currently in a game", username)))
     }
 }
 
@@ -358,10 +416,12 @@ async fn start_game(username: String, server_state: Arc<ServerState>) {
     todo!("Send initial game state to both players");
 }
 
-async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
+async fn assign_to_game(username: String, server_state: Arc<ServerState>) -> Result<(), ChessError> {
+    info!("Getting games");
     let mut games = server_state.games.lock().await;
     let mut user_game_assigned = false;
 
+    info!("Checking for an existing game with a player slot open");
     // Find an existing game with a player slot open
     for game in games.values_mut() {
         if game.white.is_none() {
@@ -377,6 +437,7 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
         }
     }
 
+    info!("Creating a new game");
     // If no open games, create a new one
     if !user_game_assigned {
         let new_game = Game {
@@ -390,12 +451,16 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) {
         info!("New game created for {username}");
     }
 
+    info!("Informing the user that they are in a game.");
     if let Some(sender) = server_state.user_connections.lock().await.get(&username) {
-        send_message(&username, Message::Log(format!("You're in a game now!")), server_state.clone(), sender).await;
+        send_message(&username, Message::Log(format!("You're in a game now!")), server_state.clone(), sender).await?;
+        Ok(())
+    } else {
+        Err(ChessError::UserNotFoundError)
     }
 }
 
-async fn send_message(username: &str, message: Message, server_state: Arc<ServerState>, sender: &Sender<Message>) {
+async fn send_message(username: &str, message: Message, server_state: Arc<ServerState>, sender: &Sender<Message>) -> Result<(), ChessError> {
     info!("Trying to send message {:?} to {username}", message);
     // let sender = {
     //         let user_connections = server_state.user_connections.lock().await;
@@ -408,7 +473,9 @@ async fn send_message(username: &str, message: Message, server_state: Arc<Server
     }
 
     if let Err(e) = sender.send(message).await {
-        error!("Failed to send message to {}: {}", username, e);
+        return Err(ChessError::MessageHandlingError(format!("Failed to send message to {}: {}", username, e)));
+    } else {
+        info!("Successfully sent message to {username}");
+        Ok(())
     }
-    info!("Successfully sent message to {username}");
 }

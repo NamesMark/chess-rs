@@ -7,6 +7,7 @@ use tokio::io::{self, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::net::tcp::{OwnedReadHalf};
 use log::{info, error};
+use thiserror::Error;
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: &str = "11111";
@@ -42,6 +43,56 @@ impl fmt::Display for Command {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum ChessError {
+    #[error("I/O error: {main}, additional info: {context}")]
+    IoError {
+        main: io::Error,
+        context: String,
+    },
+
+    #[error("network error: {0}")]
+    NetworkError(String),
+
+    #[error("serialization error: {0}")]
+    SerializationError(String),
+
+    #[error("deserialization error: {0}")]
+    DeserializationError(String),
+
+    #[error("message handling error: {0}")]
+    MessageHandlingError(String),
+
+    #[error("user authentication error: {0}")]
+    AuthenticationError(String),
+
+    #[error("database error: {0}")]
+    DatabaseError(String),
+
+    #[error("game state error: {0}")]
+    GameStateError(String),
+
+    #[error("user state error: {0}")]
+    UserStateError(String),
+    
+    #[error("user not found")]
+    UserNotFoundError,
+
+
+    #[error("sender not found for socket address: {0}")]
+    SenderNotFoundError(String),
+
+    #[error("unknown error")]
+    Unknown,
+}
+
+pub fn make_io_error(e: io::Error, info: &str) -> ChessError {
+    ChessError::IoError {
+        main: e,
+        context: info.to_string(),
+    }
+}
+
 pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> io::Result<Message> {
     loop {
         let mut len_bytes = [0u8; 4];
@@ -67,7 +118,7 @@ pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> io::Result<Messag
                 match serde_cbor::from_slice(&buffer) {
                     Ok(message) => {
                         info!("Received message: {:?}", message);
-                        message
+                        return Ok(message)
                     }
                     Err(e) => {
                         error!("Deserialization error: {}", e);

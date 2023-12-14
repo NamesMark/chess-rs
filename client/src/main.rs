@@ -76,6 +76,7 @@ async fn listen_to_server_messages(reader: &mut OwnedReadHalf, game_state: &Game
             Ok(message) => process_message(message, game_state).await,
             Err(e) => {
                 error!("Error while listening to messages: {}", e);
+                break;
             }
         }
     }
@@ -148,7 +149,7 @@ async fn process_message(message: Message, game_state: &GameState) {
         Message::Move(user_move) => panic!("Expected Board, Text, Log, received Move"),
         Message::Text(text) => display_chat_message(text, game_state),
         Message::Board(board_string) => display_board(board_string),
-        Message::Error(e) => {},
+        Message::Error(e) => display_error_message(e),
         Message::Log(message) => display_log_message(message),
     }
 }
@@ -171,6 +172,10 @@ fn display_board(board_string: String) {
 
 fn display_log_message(message: String) {
     println!("[SERVER] {message}");
+}
+
+fn display_error_message(message: String) {
+    println!("[SERVER ERROR] {message}");
 }
 
 fn display_chat_message(message: String, game_state: &GameState) {
