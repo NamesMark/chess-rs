@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use log::{info, error};
 use regex::Regex;
 
-use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, listen_to_messages};
+use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, ChessError, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
 
 lazy_static! {
@@ -82,7 +82,7 @@ async fn listen_to_server_messages(reader: &mut OwnedReadHalf, game_state: &Game
     }
 }
 
-async fn get_input(writer: &mut OwnedWriteHalf) {
+async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
     println!("Please enter your command, chat message, or chess move.");
     
     loop {

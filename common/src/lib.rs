@@ -93,41 +93,35 @@ pub fn make_io_error(e: io::Error, info: &str) -> ChessError {
     }
 }
 
-pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> io::Result<Message> {
+pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> Result<Message, ChessError> {
     loop {
         let mut len_bytes = [0u8; 4];
 
-        if let Err(e) = reader.read_exact(&mut len_bytes).await {
-            error!("Failed to read message length: {}", e);
-            return Err(e);
-        }
+        reader.read_exact(&mut len_bytes).await
+            .map_err(|e| make_io_error(e, "Failed to read message length"))?;
+
         let len = u32::from_be_bytes(len_bytes) as usize;
         info!("Message length received: {}", len);
 
         if len > 10 * 1024 * 1024 { 
-            error!("Message length too large: {}", len);
-            return Err(io::Error::new(io::ErrorKind::Other, "Message length too large"));
+            return Err(ChessError::MessageHandlingError("Message length too large".to_string()));
         }
 
         let mut buffer = vec![0u8; len];
         info!("Buffer allocated with length: {}", buffer.len());
 
-        match reader.read_exact(&mut buffer).await {
-            Ok(_) => {
-                info!("Message received, length: {}", buffer.len());
-                match serde_cbor::from_slice(&buffer) {
-                    Ok(message) => {
-                        info!("Received message: {:?}", message);
-                        return Ok(message)
-                    }
-                    Err(e) => {
-                        error!("Deserialization error: {}", e);
-                        error!("Raw data: {:?}", buffer);
-                    }
-                }
+        reader.read_exact(&mut buffer).await
+            .map_err(|e| make_io_error(e, "Failed to read message body"))?;
+
+        info!("Message received, length: {}", buffer.len());
+        match serde_cbor::from_slice(&buffer) {
+            Ok(message) => {
+                info!("Received message: {:?}", message);
+                return Ok(message)
             }
             Err(e) => {
-                error!("Failed to read message: {}", e);
+                error!("Raw data: {:?}", buffer);
+                return Err(ChessError::DeserializationError(e.to_string()))
             }
         }
     }
