@@ -14,7 +14,19 @@ use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, ChessError, listen_to
 use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
 
 lazy_static! {
-    static ref MOVE_RE: Regex = Regex::new(r"[a-h][1-8][a-h][1-8]").unwrap();
+    static ref LONG_SAN_MOVE_RE: Regex = Regex::new(r"[a-h][1-8][a-h][1-8]").unwrap();
+    static ref SAN_MOVE_RE: Regex = Regex::new(
+        r"(?x)
+        (
+            ([RNBQK])?                    # Optional piece indicator (Rook, kNight, Bishop, Queen, King)
+            ([a-h1-8])?                   # Optional file or rank specifier for disambiguation
+            (x)?                          # Optional capture indicator
+            ([a-h][1-8])                  # Destination square
+            (=[RNBQ])?                    # Optional promotion indicator
+            ([+#])?                       # Optional check/checkmate indicator
+        )
+        | (O-O(-O)?)                     # Castling (Kingside or Queenside)
+        ").unwrap();
 }
 
 struct GameState {
@@ -59,7 +71,7 @@ async fn start_client(host: &str, port: &str) {
             });
 
             let write_task = tokio::spawn(async move {
-                get_input(&mut writer).await;
+                let _  = get_input(&mut writer).await;
             });
 
             tokio::try_join!(read_task, write_task).unwrap();
@@ -102,7 +114,7 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
         let trimmed = line.trim();
 
         if trimmed.starts_with("/help") {
-            println!("Available commands: \n//help - see this message \n//log in username - attempt to log in \n//play - start a chess game \n//stats - view your statistics \n//concede - give up on the game (your opponent wins) \n: - start with semicolon to send a chat message \ne2e4 - send your chess move in long algebraic notation");          
+            println!("Available commands: \n//help - see this message \n//log in username - attempt to log in \n//play - start a chess game \n//stats - view your statistics \n//concede - give up on the game (your opponent wins) \n: - start with semicolon to send a chat message \ne2e4 - send your chess move in long algebraic notation. \"O-O\" or \"O-O-O\" for castle.");          
             continue;
         }
 
@@ -126,7 +138,7 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
         } else if trimmed.starts_with(":") {
             Message::Text(trimmed[1..].to_string())
-        } else if MOVE_RE.is_match(trimmed)  {
+        } else if LONG_SAN_MOVE_RE.is_match(trimmed) || SAN_MOVE_RE.is_match(trimmed)  {
             Message::Move(trimmed.to_string())
         } else {
             println!("Please enter a valid chess move in algebraic notation, e.g. `e2e4`");

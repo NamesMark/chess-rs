@@ -101,22 +101,22 @@ pub async fn listen_to_messages(reader: &mut OwnedReadHalf) -> Result<Message, C
             .map_err(|e| make_io_error(e, "Failed to read message length"))?;
 
         let len = u32::from_be_bytes(len_bytes) as usize;
-        info!("Message length received: {}", len);
+        //info!("Message length received: {}", len);
 
         if len > 10 * 1024 * 1024 { 
             return Err(ChessError::MessageHandlingError("Message length too large".to_string()));
         }
 
         let mut buffer = vec![0u8; len];
-        info!("Buffer allocated with length: {}", buffer.len());
+        //info!("Buffer allocated with length: {}", buffer.len());
 
         reader.read_exact(&mut buffer).await
             .map_err(|e| make_io_error(e, "Failed to read message body"))?;
 
-        info!("Message received, length: {}", buffer.len());
+        //info!("Message received, length: {}", buffer.len());
         match serde_cbor::from_slice(&buffer) {
             Ok(message) => {
-                info!("Received message: {:?}", message);
+                info!("Received message (len {}): {:?}", buffer.len(), message);
                 return Ok(message)
             }
             Err(e) => {

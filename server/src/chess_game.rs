@@ -48,6 +48,32 @@ impl Game {
             Err(_) => Err("Couldn't parse move.".to_string()),
         }
     }
+
+    pub fn is_check(&mut self) -> bool {
+        if self.board.checkers().popcnt() > 0 {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_mate(&mut self) -> bool {
+        let legal_moves = MoveGen::new_legal(&self.board);
+
+        if legal_moves.count() == 0 {
+            info!("{:?} wins by checkmate!", !self.current_turn);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_drawable(&mut self) -> bool {
+        if self.board.
+    }
+
+    // TODO draw
+    // TODO en passant
 }
 
 
@@ -61,22 +87,6 @@ pub fn start_game() {
         print_board(&board);
         debug!("{}",&board);
 
-        let legal_moves = MoveGen::new_legal(&board);
-
-        // Check for check
-        if board.checkers().popcnt() > 0 {
-            info!("Check!");
-            if legal_moves.count() == 0 {
-                info!("{:?} wins by checkmate!", !turn);
-                break;
-            }
-        }
-
-        // Prompt for user input
-        info!("Enter move for {:?} (or type 'concede' to give up): ", turn);
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
 
         // Concede command
         if input.trim().eq_ignore_ascii_case("concede") {
