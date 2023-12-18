@@ -115,7 +115,7 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
         let trimmed = line.trim();
 
         if trimmed.starts_with("/help") {
-            println!("Available commands: \n//help - see this message \n//log in username - attempt to log in \n//play - start a chess game \n//stats - view your statistics \n//concede - give up on the game (your opponent wins) \n: - start with semicolon to send a chat message \ne2e4 - send your chess move in long algebraic notation. \"O-O\" or \"O-O-O\" for castle.");          
+            println!("Available commands: \n`/help` - see this message \n`/log in %username%` - attempt to log in with your username (without percent symbols) \n`/play` - start a chess game \n`/stats` - view your statistics \n`/concede` - give up on the game (your opponent wins) \n`:` - start your message with a semicolon to send a chat message to your opponent\n`e2e4` - send your chess move in long algebraic notation. `O-O` or `O-O-O` for castle.");          
             continue;
         }
 
