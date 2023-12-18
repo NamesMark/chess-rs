@@ -31,8 +31,9 @@ lazy_static! {
 
 struct GameState {
     my_username: String,
-    in_game: bool,
-    my_turn: bool,
+    //my_elo: u32, // not used for now
+    //in_game: bool, // not used for now
+    //my_turn: bool, // not used for now
     opponent_username: String,
 }
 
@@ -40,9 +41,9 @@ impl GameState {
     fn new() -> Self {
         Self {
             my_username: "".to_string(),
-            in_game: false,
-            my_turn: false,
-            opponent_username: "".to_string(),
+            //in_game: false,
+            //my_turn: false,
+            opponent_username: "opponent".to_string(),
         }
     }
 }
