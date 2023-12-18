@@ -64,20 +64,8 @@ impl ServerState {
         self.last_game_id.fetch_add(1, Ordering::SeqCst)
     }
 
-    // TODO user connections, game session assignments, etc etc
+    // TODO add postgreSQL for user and game data 
 }
-
-// struct Connection {
-//     tx: mpsc::Sender<Message>, // Sender channel
-// }
-
-// impl Connection {
-//     async fn send_message(&self, message: Message) {
-//         self.tx.send(message).await.unwrap();
-//     }
-// }
-
-
 
 #[tokio::main]
 async fn main() {
