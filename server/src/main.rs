@@ -34,6 +34,7 @@ struct ServerState {
     anon_user_connections: Arc<Mutex<HashMap<SocketAddr, mpsc::Sender<Message>>>>, // kill me
     addr_to_user: Arc<Mutex<HashMap<SocketAddr, String>>>, // reverse mapping to identify which user the message is coming from
     games: Arc<Mutex<HashMap<u32, Arc<Mutex<Game>>>>>, // game_id to Game
+    finished_games: Arc<Mutex<HashMap<u32, Arc<Mutex<Game>>>>>,
     user_to_game: Arc<Mutex<HashMap<String, u32>>>, // username to game_id
     user_file_mutex: Arc<Mutex<Option<tokio::fs::File>>>,
     last_game_id: AtomicU32, 
@@ -52,6 +53,7 @@ impl ServerState {
             anon_user_connections: Arc::new(Mutex::new(HashMap::new())),
             addr_to_user: Arc::new(Mutex::new(HashMap::new())),
             games: Arc::new(Mutex::new(HashMap::new())),
+            finished_games: Arc::new(Mutex::new(HashMap::new())),
             user_to_game: Arc::new(Mutex::new(HashMap::new())),
             user_file_mutex: Arc::new(Mutex::new(Some(file))),
             last_game_id: AtomicU32::new(0),
@@ -178,7 +180,8 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
     {
         let mut anon_user_connections = server_state.anon_user_connections.lock().await;
         if let Some(sender) = anon_user_connections.get(&socket_addr) {
-            let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await;
+            let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await
+                .map_err(|e| ChessError::MessageHandlingError(format!("Failed to send message: {}", e)));
         }
         anon_user_connections.remove(&socket_addr);
     }
@@ -188,7 +191,8 @@ async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
         let mut user_connections = server_state.user_connections.lock().await;
         if let Some(username) = username {
             if let Some(sender) = user_connections.get(&username) {
-                let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await;
+                let _ = sender.send(Message::Log("You have been disconnected. Bye!".to_string())).await
+                    .map_err(|e| ChessError::MessageHandlingError(format!("Failed to send message: {}", e)));
             }
             user_connections.remove(&username);
         }
@@ -220,7 +224,8 @@ async fn listen_to_client_messages(reader: &mut OwnedReadHalf, socket_addr: &Soc
 async fn process_message(message: Message, socket_addr: &SocketAddr, server_state: Arc<ServerState>) -> Result<(), ChessError> {
     match message {
         Message::Command(command) => process_command(command, socket_addr, server_state).await,
-        Message::Move(player_move) => {
+        Message::Move(player_move) => { 
+            // TODO: refactor - we identify game twice while processing move
             if let Some(username) = identify_user_by_addr(socket_addr, &server_state).await {
                 if let Err(err) = process_move(player_move, &username, &server_state).await {
                     // Handle move processing error (e.g., invalid move)
@@ -229,7 +234,7 @@ async fn process_message(message: Message, socket_addr: &SocketAddr, server_stat
         
                 match identify_game(&username, &server_state).await {
                     Ok(game) => {
-                        send_game_state(&*game.lock().await, &server_state).await?;
+                        send_game_state(&mut *game.lock().await, &server_state).await?;
                         Ok(())
                     },
                     Err(err) => {
@@ -258,7 +263,7 @@ async fn process_message(message: Message, socket_addr: &SocketAddr, server_stat
     }
 }
 
-async fn send_game_state(game: &Game, server_state: &Arc<ServerState>) -> Result<(), ChessError> {
+async fn send_game_state(game: &mut Game, server_state: &Arc<ServerState>) -> Result<(), ChessError> {
     let user_connections = server_state.user_connections.lock().await;
 
     let white_player = game.white.as_ref().ok_or(ChessError::GameStateError("White player missing".to_string()))?;
@@ -277,6 +282,22 @@ async fn send_game_state(game: &Game, server_state: &Arc<ServerState>) -> Result
     } else {
         black_sender.send(Message::Log(format!("Your turn, black player {black_player}!"))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
     }
+
+    if game.result == None {
+        if game.is_check() {
+            white_sender.send(Message::Log(format!("Check!"))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
+            black_sender.send(Message::Log(format!("Check!"))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
+        }
+        return Ok(());
+    } 
+    
+    if game.is_mate() {
+        white_sender.send(Message::Log(format!("Mate!"))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
+        black_sender.send(Message::Log(format!("Mate!"))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
+    }
+
+    white_sender.send(Message::Log(format!("Game is finished. Result is: {:?}", game.result))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?;
+    black_sender.send(Message::Log(format!("Game is finished. Result is: {:?}", game.result))).await.map_err(|e| ChessError::MessageHandlingError(e.to_string()))?; 
 
     Ok(())
 }
@@ -341,7 +362,7 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     Err(ChessError::SenderNotFoundError(format!("Sender not found for socket address: {:?}", socket_addr)))
                 }
             } else {
-                register(&username).await;
+                let _ = register(&username).await?;
                 let sender = {
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
@@ -381,18 +402,41 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                 info!("Assigning to a game");
                 assign_to_game(username, server_state.clone()).await
             } else {
-                // Handle the case for anonymous users or failed username identification
                 let sender = {
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
                 };
                 if let Some(sender) = sender {
-                    sender.send(Message::Error("Anonymous users cannot start games. Please use /log in.".to_string())).await;
+                    let _ = sender.send(Message::Error("Anonymous users cannot start games. Please use /log in.".to_string())).await;
                 }
                 Err(ChessError::UserStateError("Failed to get username from the server state (unregistered player tried to play).".to_string()))
             }
         },
-        Command::Concede => unimplemented!("TODO concede"),
+        Command::Concede => {
+            if let Some(username) = identify_user_by_addr(socket_addr, &server_state).await {
+                match identify_game(&username, &server_state).await {
+                    Ok(game_arc) => {
+                        let mut game = game_arc.lock().await;
+                        game.concede(&username).unwrap_or_else(|e| error!("Error during concession: {}", e));
+        
+                        let mut user_to_game = server_state.user_to_game.lock().await;
+                        if let Some(player) = game.white.as_ref() {
+                            user_to_game.remove(player);
+                        }
+                        if let Some(player) = game.black.as_ref() {
+                            user_to_game.remove(player);
+                        }
+        
+                        send_game_state(&mut game, &server_state).await?;
+        
+                        Ok(())
+                    },
+                    Err(err) => Err(err),
+                }
+            } else {
+                Err(ChessError::UserNotFoundError)
+            }
+        }
         Command::Stats => unimplemented!("TODO stats"),
         _ => unreachable!("Unexpected command {command}")
     }
@@ -462,11 +506,28 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
             match game.make_move(&user_move) {
                 Ok(_) => {
                     info!("Move made: {}", user_move);
+                    let game_is_finished: bool = game.result.is_some();
+
+                    drop(game);
+
+                    if game_is_finished {
+                        let mut finished_games = server_state.finished_games.lock().await;
+                        let mut games = server_state.games.lock().await;
+
+                        if let Some(game_arc) = games.remove(&game_id) {
+                            finished_games.insert(game_id, game_arc);
+                        }
+                    }
+
                     Ok(())
                 }
                 Err(err_msg) => Err(ChessError::GameStateError(err_msg)),
             }
         } else {
+            if let Some(sender) = server_state.user_connections.lock().await.get(username) {
+                sender.send(Message::Error("You are not in a game. Start a game using /play.".to_string())).await
+                    .map_err(|e| ChessError::MessageHandlingError(format!("Failed to send message: {}", e)))?;
+            }
             Err(ChessError::GameStateError("Game not found".to_string()))
         }
     } else {
@@ -474,7 +535,7 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
     }
 }
 
-async fn start_game (game: &Game, server_state: &Arc<ServerState>) -> Result<(), ChessError> {
+async fn start_game (game: &mut Game, server_state: &Arc<ServerState>) -> Result<(), ChessError> {
     let white_player = game.white.as_ref().ok_or(ChessError::GameStateError("White player missing".to_string()))?;
     let black_player = game.black.as_ref().ok_or(ChessError::GameStateError("Black player missing".to_string()))?;
 
@@ -504,7 +565,7 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) -> Res
             user_game_assigned = true;
             assigned_game_id = game_id;
             info!("{} is now black in game {}", username, game_id);
-            let _ = start_game(&game, &server_state).await?;
+            let _ = start_game(&mut game, &server_state).await?;
             break;
         }
     }
@@ -519,6 +580,7 @@ async fn assign_to_game(username: String, server_state: Arc<ServerState>) -> Res
             white: Some(username.clone()),
             black: None,
             status: chess_game::GameStatus::Pending,
+            result: None,
         };
         games.insert(new_game_id, Arc::new(Mutex::new(new_game)));
         assigned_game_id = new_game_id;

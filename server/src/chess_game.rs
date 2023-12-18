@@ -1,4 +1,4 @@
-use chess::{Board, ChessMove, Color, Piece, Square, MoveGen};
+use chess::{GameResult, Board, BoardStatus, ChessMove, Color, Piece, Square, MoveGen};
 use std::io::{self, Write};
 use std::str::FromStr;
 use env_logger::Env;
@@ -13,6 +13,7 @@ pub struct Game {
     pub white: Option<String>,
     pub black: Option<String>,
     pub status: GameStatus,
+    pub result: Option<GameResult>,
 }
 
 #[derive(Debug)]
@@ -31,6 +32,7 @@ impl Game {
             white: None,
             black: None,
             status: GameStatus::Pending,
+            result: None,
         }
     }
 
@@ -49,6 +51,19 @@ impl Game {
         }
     }
 
+    pub fn concede(&mut self, player: &String) -> Result<(), String> {
+        info!("{:?} concedes. {:?} wins!", self.current_turn, !self.current_turn);
+        if self.white.as_ref() == Some(player) {
+            self.result = Some(GameResult::WhiteResigns);
+        } else if self.black.as_ref() == Some(player) {
+            self.result = Some(GameResult::BlackResigns);
+        } else {
+            return Err("Unknown player.".to_string());
+        }
+        self.status = GameStatus::Finished;
+        Ok(())
+    }
+
     pub fn is_check(&mut self) -> bool {
         if self.board.checkers().popcnt() > 0 {
             true
@@ -62,6 +77,12 @@ impl Game {
 
         if legal_moves.count() == 0 {
             info!("{:?} wins by checkmate!", !self.current_turn);
+            if self.current_turn == Color::White {
+                self.result = Some(GameResult::BlackCheckmates);
+            } else {
+                self.result = Some(GameResult::WhiteCheckmates);
+            }
+            self.status = GameStatus::Finished;
             true
         } else {
             false
@@ -69,46 +90,16 @@ impl Game {
     }
 
     pub fn is_drawable(&mut self) -> bool {
-        if self.board.
+        todo!() //if self.board.
     }
 
-    // TODO draw
+    pub fn check_result(&self) -> Option<GameResult> {
+        // TODO draw
+        // Some(GameResult::DrawAccepted)
+        // Some(GameResult::WhiteResigns)
+        // Some(GameResult::BlackResigns)
+        unimplemented!()
+    }
+
     // TODO en passant
-}
-
-
-pub fn start_game() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-
-    let mut board = Board::default();
-    let mut turn = Color::White;
-
-    loop {
-        print_board(&board);
-        debug!("{}",&board);
-
-
-        // Concede command
-        if input.trim().eq_ignore_ascii_case("concede") {
-            info!("{:?} concedes. {:?} wins!", turn, !turn);
-            break;
-        }
-
-        // Parse and apply the move
-        match ChessMove::from_str(&input.trim()) {
-            Ok(mov) => {
-                if board.legal(mov) {
-                    board = board.make_move_new(mov);
-                    turn = !turn;
-                    info!("Move made: {:?}", mov);
-                    debug!("Board after move:\n{}", board);
-                } else {
-                    error!("Invalid move. Try again.");
-                }
-            }
-            Err(_) => {
-                error!("Couldn't parse input. Please use long algebraic notation (e.g., e2e4).");
-            }
-        }
-    }
 }

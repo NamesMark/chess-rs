@@ -131,6 +131,8 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
                 Message::Command(Command::Play)
             } else if trimmed.starts_with("/stat") {
                 Message::Command(Command::Stats)
+            } else if trimmed.starts_with("/concede") {
+                Message::Command(Command::Concede)
             } else {
                 println!("Unrecognized command. Please use /help to see the list of available commands.");
                 continue;
@@ -138,7 +140,7 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
         } else if trimmed.starts_with(":") {
             Message::Text(trimmed[1..].to_string())
-        } else if LONG_SAN_MOVE_RE.is_match(trimmed) || SAN_MOVE_RE.is_match(trimmed)  {
+        } else if LONG_SAN_MOVE_RE.is_match(trimmed) || SAN_MOVE_RE.is_match(trimmed) {
             Message::Move(trimmed.to_string())
         } else {
             println!("Please enter a valid chess move in algebraic notation, e.g. `e2e4`");
