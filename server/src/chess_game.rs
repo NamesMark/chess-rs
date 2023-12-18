@@ -4,6 +4,7 @@ use std::str::FromStr;
 use env_logger::Env;
 use log::{info, error, debug};
 
+use common::{ChessError};
 use common::chess_utils::{print_board, piece_to_unicode};
 
 #[derive(Debug)]
@@ -36,7 +37,7 @@ impl Game {
         }
     }
 
-    pub fn make_move(&mut self, move_str: &str) -> Result<(), String> {
+    pub fn make_move(&mut self, move_str: &str) -> Result<(), ChessError> {
         match ChessMove::from_str(move_str) {
             Ok(mov) => {
                 if self.board.legal(mov) {
@@ -44,21 +45,21 @@ impl Game {
                     self.current_turn = !self.current_turn;
                     Ok(())
                 } else {
-                    Err("Invalid move.".to_string())
+                    Err(ChessError::GameStateError("Invalid move.".to_string()))
                 }
             }
-            Err(_) => Err("Couldn't parse move.".to_string()),
+            Err(_) => Err(ChessError::GameStateError("Couldn't parse move.".to_string())),
         }
     }
 
-    pub fn concede(&mut self, player: &String) -> Result<(), String> {
+    pub fn concede(&mut self, player: &String) -> Result<(), ChessError> {
         info!("{:?} concedes. {:?} wins!", self.current_turn, !self.current_turn);
         if self.white.as_ref() == Some(player) {
             self.result = Some(GameResult::WhiteResigns);
         } else if self.black.as_ref() == Some(player) {
             self.result = Some(GameResult::BlackResigns);
         } else {
-            return Err("Unknown player.".to_string());
+            return Err(ChessError::UserNotFoundError);
         }
         self.status = GameStatus::Finished;
         Ok(())

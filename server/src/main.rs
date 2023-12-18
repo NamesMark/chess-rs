@@ -22,7 +22,7 @@ use tokio::sync::mpsc::Sender;
 use log::{info, error};
 use chess::{Board, Color};
 
-use crate::chess_game::{Game};
+use crate::chess_game::{Game, GameStatus};
 
 use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, ChessError, make_io_error, listen_to_messages};
 use common::chess_utils::{print_board, piece_to_unicode};
@@ -367,11 +367,6 @@ async fn process_command(command: Command, socket_addr: &SocketAddr, server_stat
                     let mut anon_connections = server_state.anon_user_connections.lock().await;
                     anon_connections.remove(&socket_addr)
                 };
-                if let Some(test_sender) = sender.clone() {
-                    info!("Sender is {:?}", test_sender);
-                } else {
-                    info!("Sender doesn't exist");
-                }
                 if let Some(sender) = sender {
                     info!("Trying to insert the user into user_connections");
                     let mut user_connections = server_state.user_connections.lock().await;
@@ -503,26 +498,22 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
                 return Err(ChessError::GameStateError("It's not your turn.".to_string()));
             }
 
-            match game.make_move(&user_move) {
-                Ok(_) => {
-                    info!("Move made: {}", user_move);
-                    let game_is_finished: bool = game.result.is_some();
+            game.make_move(&user_move)?;
+            info!("Move made: {}", user_move);
+            let game_is_finished: bool = game.result.is_some();
 
-                    drop(game);
+            drop(game);
 
-                    if game_is_finished {
-                        let mut finished_games = server_state.finished_games.lock().await;
-                        let mut games = server_state.games.lock().await;
+            if game_is_finished {
+                let mut finished_games = server_state.finished_games.lock().await;
+                let mut games = server_state.games.lock().await;
 
-                        if let Some(game_arc) = games.remove(&game_id) {
-                            finished_games.insert(game_id, game_arc);
-                        }
-                    }
-
-                    Ok(())
+                if let Some(game_arc) = games.remove(&game_id) {
+                    finished_games.insert(game_id, game_arc);
                 }
-                Err(err_msg) => Err(ChessError::GameStateError(err_msg)),
             }
+
+            Ok(())
         } else {
             if let Some(sender) = server_state.user_connections.lock().await.get(username) {
                 sender.send(Message::Error("You are not in a game. Start a game using /play.".to_string())).await
@@ -538,6 +529,8 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
 async fn start_game (game: &mut Game, server_state: &Arc<ServerState>) -> Result<(), ChessError> {
     let white_player = game.white.as_ref().ok_or(ChessError::GameStateError("White player missing".to_string()))?;
     let black_player = game.black.as_ref().ok_or(ChessError::GameStateError("Black player missing".to_string()))?;
+
+    game.status = GameStatus::InProgress;
 
     info!("Starting a new game: {} as whites, {} as blacks.", white_player, black_player);
     send_game_state(game, server_state).await?;
