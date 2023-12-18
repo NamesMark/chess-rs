@@ -4,14 +4,13 @@ extern crate regex;
 
 use std::io::{self, Write};
 
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use log::{info, error};
 use regex::Regex;
 
 use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, ChessError, listen_to_messages};
-use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
+use common::chess_utils::{print_board, board_from_string};
 
 lazy_static! {
     static ref LONG_SAN_MOVE_RE: Regex = Regex::new(r"[a-h][1-8][a-h][1-8]").unwrap();
@@ -30,7 +29,7 @@ lazy_static! {
 }
 
 struct GameState {
-    my_username: String,
+    //my_username: String,
     //my_elo: u32, // not used for now
     //in_game: bool, // not used for now
     //my_turn: bool, // not used for now
@@ -40,7 +39,7 @@ struct GameState {
 impl GameState {
     fn new() -> Self {
         Self {
-            my_username: "".to_string(),
+            //my_username: "".to_string(),
             //in_game: false,
             //my_turn: false,
             opponent_username: "opponent".to_string(),
@@ -163,8 +162,8 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
 async fn process_message(message: Message, game_state: &GameState) {
     match message {
-        Message::Command(command) => panic!("Expected Board, Text, Log, received Command"),
-        Message::Move(user_move) => panic!("Expected Board, Text, Log, received Move"),
+        Message::Command(_) => panic!("Expected Board, Text, Log, received Command"),
+        Message::Move(_) => panic!("Expected Board, Text, Log, received Move"),
         Message::Text(text) => display_chat_message(text, game_state),
         Message::Board(board_string) => display_board(board_string),
         Message::Error(e) => display_error_message(e),

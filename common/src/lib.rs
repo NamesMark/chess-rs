@@ -4,8 +4,7 @@ use std::fmt;
 
 use serde::{Serialize, Deserialize};
 use tokio::io::{self, AsyncReadExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::net::tcp::{OwnedReadHalf};
+use tokio::net::tcp::OwnedReadHalf;
 use log::{info, error};
 use thiserror::Error;
 

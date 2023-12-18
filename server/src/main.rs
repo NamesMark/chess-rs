@@ -2,18 +2,14 @@
 
 mod chess_game;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::path::PathBuf;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
-use std::io::Write;
 use std::net::SocketAddr;
 
 use tokio::net::{TcpListener, TcpStream};
-use tokio::net::tcp::{OwnedReadHalf};
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use tokio::fs;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::io::AsyncWriteExt;
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -25,7 +21,6 @@ use chess::{Board, Color};
 use crate::chess_game::{Game, GameStatus};
 
 use common::{DEFAULT_HOST, DEFAULT_PORT, Message, Command, ChessError, make_io_error, listen_to_messages};
-use common::chess_utils::{print_board, piece_to_unicode};
 
 const USER_FILE: &str = "database/usernames.txt";
 
@@ -122,7 +117,7 @@ async fn start_server(host: String, port: String, mut shutdown_signal: broadcast
     }
 }
 
-async fn handle_client(mut socket: TcpStream, server_state: Arc<ServerState>) {
+async fn handle_client(socket: TcpStream, server_state: Arc<ServerState>) {
     let (tx, mut rx) = mpsc::channel::<Message>(100); // Channel for communication
     let socket_addr = match socket.peer_addr() {
         Ok(addr) => addr,
@@ -245,9 +240,9 @@ async fn process_message(message: Message, socket_addr: &SocketAddr, server_stat
             }
             Ok(())
         },
-        Message::Board(board_string) => panic!("Expected Command, Move or Text, received Board"),
-        Message::Error(e) => panic!("Expected Command, Move or Text, received Error"),
-        Message::Log(message) => panic!("Expected Command, Move or Text, received Log"),
+        Message::Board(_) => panic!("Expected Command, Move or Text, received Board"),
+        Message::Error(_) => panic!("Expected Command, Move or Text, received Error"),
+        Message::Log(_) => panic!("Expected Command, Move or Text, received Log"),
     }
 }
 
