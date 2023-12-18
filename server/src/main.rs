@@ -502,6 +502,9 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
             info!("Move made: {}", user_move);
             let game_is_finished: bool = game.result.is_some();
 
+            let white_player = game.white.clone();
+            let black_player = game.black.clone();
+
             drop(game);
 
             if game_is_finished {
@@ -510,6 +513,14 @@ async fn process_move(user_move: String, username: &String, server_state: &Arc<S
 
                 if let Some(game_arc) = games.remove(&game_id) {
                     finished_games.insert(game_id, game_arc);
+                }
+
+                let mut user_to_game = server_state.user_to_game.lock().await;
+                if let Some(player) = white_player {
+                    user_to_game.remove(&player);
+                }
+                if let Some(player) = black_player {
+                    user_to_game.remove(&player);
                 }
             }
 
