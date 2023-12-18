@@ -150,7 +150,10 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
         match send_message(writer, &message).await {
             Ok(()) => info!("Message {:?} sent successfully!", message),
-            Err(e) => error!("Failed to send message: {}", e),
+            Err(e) => {
+                error!("Failed to send message: {}", e);
+                return Err(e);
+            },
         }
         
     }
@@ -169,17 +172,27 @@ async fn process_message(message: Message, game_state: &GameState) {
     }
 }
 
-async fn send_message(writer: &mut OwnedWriteHalf, message: &Message) -> io::Result<()> {
-    let serialized_message = serde_cbor::to_vec(&message)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+async fn send_message(writer: &mut OwnedWriteHalf, message: &Message) -> Result<(), ChessError> {
+    let serialized_message = serde_cbor::to_vec(message)
+        .map_err(|e| ChessError::IoError { 
+            main: io::Error::new(io::ErrorKind::Other, e),
+            context: "Failed to serialize message".to_string(),
+        })?;
     let len = serialized_message.len() as u32;
     let len_bytes = len.to_be_bytes();
 
-    writer.write_all(&len_bytes).await?; 
-    writer.write_all(&serialized_message).await?;
+    writer.write_all(&len_bytes).await.map_err(|e| ChessError::IoError {
+        main: e,
+        context: "Failed to send message length".to_string(),
+    })?;
+    writer.write_all(&serialized_message).await.map_err(|e| ChessError::IoError {
+        main: e,
+        context: "Failed to send message".to_string(),
+    })?;
 
     Ok(())
 }
+
 
 fn display_board(board_string: String) {
     print_board(&board_from_string(board_string).expect("Unexpected board format."));
