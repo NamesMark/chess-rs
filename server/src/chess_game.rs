@@ -1,11 +1,9 @@
-use chess::{GameResult, Board, BoardStatus, ChessMove, Color, Piece, Square, MoveGen};
-use std::io::{self, Write};
 use std::str::FromStr;
-use env_logger::Env;
-use log::{info, error, debug};
 
-use common::{ChessError};
-use common::chess_utils::{print_board, piece_to_unicode};
+use chess::{GameResult, Board, ChessMove, Color, MoveGen};
+use log::info;
+
+use common::ChessError;
 
 #[derive(Debug)]
 pub struct Game {

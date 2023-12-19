@@ -4,14 +4,13 @@ extern crate regex;
 
 use std::io::{self, Write};
 
-use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use log::{info, error};
 use regex::Regex;
 
 use common::{Message, Command, DEFAULT_HOST, DEFAULT_PORT, ChessError, listen_to_messages};
-use common::chess_utils::{print_board, piece_to_unicode, board_from_string};
+use common::chess_utils::{print_board, board_from_string};
 
 lazy_static! {
     static ref LONG_SAN_MOVE_RE: Regex = Regex::new(r"[a-h][1-8][a-h][1-8]").unwrap();
@@ -30,7 +29,7 @@ lazy_static! {
 }
 
 struct GameState {
-    my_username: String,
+    //my_username: String,
     //my_elo: u32, // not used for now
     //in_game: bool, // not used for now
     //my_turn: bool, // not used for now
@@ -40,7 +39,7 @@ struct GameState {
 impl GameState {
     fn new() -> Self {
         Self {
-            my_username: "".to_string(),
+            //my_username: "".to_string(),
             //in_game: false,
             //my_turn: false,
             opponent_username: "opponent".to_string(),
@@ -115,7 +114,7 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
         let trimmed = line.trim();
 
         if trimmed.starts_with("/help") {
-            println!("Available commands: \n//help - see this message \n//log in username - attempt to log in \n//play - start a chess game \n//stats - view your statistics \n//concede - give up on the game (your opponent wins) \n: - start with semicolon to send a chat message \ne2e4 - send your chess move in long algebraic notation. \"O-O\" or \"O-O-O\" for castle.");          
+            println!("Available commands: \n`/help` - see this message \n`/log in %username%` - attempt to log in with your username (without percent symbols) \n`/play` - start a chess game \n`/stats` - view your statistics \n`/concede` - give up on the game (your opponent wins) \n`:` - start your message with a semicolon to send a chat message to your opponent\n`e2e4` - send your chess move in long algebraic notation. `O-O` or `O-O-O` for castle.");          
             continue;
         }
 
@@ -150,7 +149,10 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
         match send_message(writer, &message).await {
             Ok(()) => info!("Message {:?} sent successfully!", message),
-            Err(e) => error!("Failed to send message: {}", e),
+            Err(e) => {
+                error!("Failed to send message: {}", e);
+                return Err(e);
+            },
         }
         
     }
@@ -160,8 +162,8 @@ async fn get_input(writer: &mut OwnedWriteHalf) -> Result<(), ChessError> {
 
 async fn process_message(message: Message, game_state: &GameState) {
     match message {
-        Message::Command(command) => panic!("Expected Board, Text, Log, received Command"),
-        Message::Move(user_move) => panic!("Expected Board, Text, Log, received Move"),
+        Message::Command(_) => panic!("Expected Board, Text, Log, received Command"),
+        Message::Move(_) => panic!("Expected Board, Text, Log, received Move"),
         Message::Text(text) => display_chat_message(text, game_state),
         Message::Board(board_string) => display_board(board_string),
         Message::Error(e) => display_error_message(e),
@@ -169,17 +171,27 @@ async fn process_message(message: Message, game_state: &GameState) {
     }
 }
 
-async fn send_message(writer: &mut OwnedWriteHalf, message: &Message) -> io::Result<()> {
-    let serialized_message = serde_cbor::to_vec(&message)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+async fn send_message(writer: &mut OwnedWriteHalf, message: &Message) -> Result<(), ChessError> {
+    let serialized_message = serde_cbor::to_vec(message)
+        .map_err(|e| ChessError::IoError { 
+            main: io::Error::new(io::ErrorKind::Other, e),
+            context: "Failed to serialize message".to_string(),
+        })?;
     let len = serialized_message.len() as u32;
     let len_bytes = len.to_be_bytes();
 
-    writer.write_all(&len_bytes).await?; 
-    writer.write_all(&serialized_message).await?;
+    writer.write_all(&len_bytes).await.map_err(|e| ChessError::IoError {
+        main: e,
+        context: "Failed to send message length".to_string(),
+    })?;
+    writer.write_all(&serialized_message).await.map_err(|e| ChessError::IoError {
+        main: e,
+        context: "Failed to send message".to_string(),
+    })?;
 
     Ok(())
 }
+
 
 fn display_board(board_string: String) {
     print_board(&board_from_string(board_string).expect("Unexpected board format."));
